@@ -1,5 +1,6 @@
 import geopandas as gpd
 import xarray as xr
+import pandas as pd
 from typing import Union
 from exactextract import exact_extract
 from pathlib import Path
@@ -77,3 +78,81 @@ class Area():
             clipped.to_netcdf(self.output_path / f"{self.id}_clipped.nc")
         
         return clipped
+    
+    def aggregate(self, stgrid:  xr.DataArray, operations: list[str], save_result: bool = False) -> pd.DataFrame:
+        """
+        Aggregate the spatiotemporal grid to the area's geometry.  
+        Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped  
+        raster data also results in much faster aggregation.  
+        The aggregation is spatially (e.g. the spatial mean), so the time dimension is preserved and 
+        the result is a time series DataFrame with the same time dimension as the input grid.
+
+        Parameters
+        ----------
+        stgrid : xr.DataArray
+            The spatiotemporal grid to aggregate. Must be a xr.DataArray, as only one variable  
+            can be aggregated.
+        operations : list[str]
+            The operations to use for aggregation.  
+            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
+            supported by the [exact_extract](https://github.com/isciences/exactextract) package.
+            The default is "mean".
+        save_result : bool, optional
+            If True, the aggregated grid will be saved to the output directory of the area.  
+            The default is False.
+
+        Returns
+        -------
+        pd.DataFrame
+            The aggregated spatiotemporal grid.
+
+        """
+        # Check if the stgrid is a xarray Dataset or DataArray
+        if not isinstance(stgrid, xr.DataArray):
+            raise TypeError("The stgrid must be a xarray DataArray.")
+        
+        # Check if operations is a list
+        if not isinstance(operations, list):
+            operations = [operations]
+
+        # Set the crs of the geometry to the crs of the stgrid
+        geometry = self.geometry.to_crs(stgrid.rio.crs)
+
+        # Aggregate the clipped grid to the geometry
+        df = exact_extract(stgrid, geometry, operations, output="pandas")
+
+        # Transpose dataframe
+        df = df.T
+
+        # Get the time index from the xarray dataset
+        time_index = stgrid.time.values
+        
+        # Create a list of dataframes, each dataframe contains the timeseries for one statistic
+        sliced_dfs = [df.iloc[i:i+len(time_index)] for i in range(0, len(df), len(time_index))]
+
+        # Set the index to the time values and rename the columns
+        for i, df in enumerate(sliced_dfs):
+            df.index = time_index
+            df.columns = [f"{stgrid.name}_{operations[i]}"]
+        
+            # Replace quantile column names to not include brackets, equal sign and points
+            for col in df.columns:
+                if "quantile" in col:
+                    # get the quantile value
+                    q = int(float(col.split('=')[1].split(')')[0]) * 100)
+
+                    # replace the column name
+                    df.rename(columns={col: f"{stgrid.name}_quantile{q}"}, inplace=True)                
+
+        # Concatenate the dataframes
+        df_timeseries = pd.concat(sliced_dfs, axis=1)
+
+        # Save the aggregated grid to the output directory of the area
+        if save_result:
+             # Create the output directory if it does not exist
+            self.output_path.mkdir(parents=True, exist_ok=True)
+
+            # Save the aggregated timeseries to the output directory
+            df_timeseries.to_csv(self.output_path / f"{self.id}_aggregated.csv", index_label="time")
+        
+        return df_timeseries
