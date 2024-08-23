@@ -36,7 +36,7 @@ class Area():
         # Set the output path of the area: output_dir/id
         self.output_path = output_dir / self.id
 
-    def clip(self, stgrid: Union[xr.Dataset, xr.DataArray], all_touched: bool = False, save_result: bool = False) -> xr.Dataset:
+    def clip(self, stgrid: Union[xr.Dataset, xr.DataArray], all_touched: bool = True, save_result: bool = False) -> xr.Dataset:
         """
         Clip the spatiotemporal grid to the area's geometry.
 
@@ -48,7 +48,7 @@ class Area():
             If True, all pixels that are at least partially in the catchment are returned.  
             If False, only pixels whose center is within the polygon or that are selected by Bresenham's line algorithm are selected.  
             Note that you should set `all_touched=True` if you want to calculate weighted statistics with the `aggregate` method later.  
-            The default is False.
+            The default is True, as the aggregation uses exact_extract by default.
         save_result : bool, optional
             If True, the clipped grid will be saved to the output directory of the area.  
             The default is False.
