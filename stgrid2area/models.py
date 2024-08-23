@@ -107,6 +107,10 @@ class Area():
             The aggregated spatiotemporal grid.
 
         """
+        # Check dimensionality of gridded data, calculating weighted statistics with exactaxtract can only be done if shape is >= (2, 2)
+        if 1 in stgrid.isel(time=0).shape:
+            raise NotImplementedError("Gridded data has spatial dimensionality of 1 in at least one direction, aggregation for 1-D data is not supported at the moment.")
+
         # Check if the stgrid is a xarray Dataset or DataArray
         if not isinstance(stgrid, xr.DataArray):
             raise TypeError("The stgrid must be a xarray DataArray.")
