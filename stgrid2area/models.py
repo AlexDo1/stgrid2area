@@ -36,6 +36,19 @@ class Area():
         # Set the output path of the area: output_dir/id
         self.output_path = output_dir / self.id
 
+    @property
+    def has_clip(self) -> bool:
+        """
+        Check if the area already has a clipped grid in the output path.
+        
+        Returns
+        -------
+        bool
+            True if the area has a clipped grid, False otherwise.
+
+        """
+        return (self.output_path / f"{self.id}_clipped.nc").exists()
+
     def clip(self, stgrid: Union[xr.Dataset, xr.DataArray], all_touched: bool = True, save_result: bool = False) -> xr.Dataset:
         """
         Clip the spatiotemporal grid to the area's geometry.
