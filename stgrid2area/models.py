@@ -48,6 +48,19 @@ class Area():
 
         """
         return (self.output_path / f"{self.id}_clipped.nc").exists()
+    
+    @property
+    def has_aggregate(self) -> bool:
+        """
+        Check if the area already has an aggregated csv file in the output path.
+        
+        Returns
+        -------
+        bool
+            True if the area has an aggregated grid, False otherwise.
+
+        """
+        return (self.output_path / f"{self.id}_aggregated.csv").exists()
 
     def clip(self, stgrid: Union[xr.Dataset, xr.DataArray], all_touched: bool = True, save_result: bool = False) -> xr.Dataset:
         """
