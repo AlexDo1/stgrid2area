@@ -1,15 +1,15 @@
 import os
+from pathlib import Path
+from typing import Union
 
 import geopandas as gpd
-import xarray as xr
 import pandas as pd
-from typing import Union
+import xarray as xr
 from exactextract import exact_extract
-from pathlib import Path
 
 
 class Area():
-    def __init__(self, geometry: gpd.GeoDataFrame, id: str, output_dir: str):
+    def __init__(self, geometry: Union[gpd.GeoDataFrame, gpd.GeoSeries], id: str, output_dir: str):
         """
         Initialize an Area object.
 
@@ -30,13 +30,19 @@ class Area():
         if isinstance(geometry, gpd.GeoDataFrame):
             self.geometry = geometry
         else:
-            raise TypeError("The geometry must be a GeoDataFrame.")
+            raise TypeError("The geometry must be a GeoDataFrame or a GeoSeries.")
         
         # Make output_dir a Path
         output_dir = Path(output_dir)
 
         # Set the output path of the area: output_dir/id
         self.output_path = output_dir / self.id
+
+    def __repr__(self):
+        return f"Area(id={self.id})"
+    
+    def __str__(self):
+        return f"Area with id {self.id}"
 
     @property
     def has_clip(self) -> bool:
@@ -161,7 +167,7 @@ class Area():
         if 1 in stgrid.isel(time=0).shape:
             raise NotImplementedError("Gridded data has spatial dimensionality of 1 in at least one direction, aggregation for 1-D data is not supported at the moment.")
 
-        # Check if the stgrid is a xarray Dataset or DataArray
+        # Check if the stgrid is a xarray DataArray
         if not isinstance(stgrid, xr.DataArray):
             raise TypeError("The stgrid must be a xarray DataArray.")
         
@@ -206,13 +212,7 @@ class Area():
              # Create the output directory if it does not exist
             self.output_path.mkdir(parents=True, exist_ok=True)
 
-            # Check if the aggregated grid already exists
-            if self.has_aggregate:
-                if overwrite:
-                    # Overwrite the existing aggregated grid
-                    df_timeseries.to_csv(self.output_path / f"{self.id}_aggregated.csv", index_label="time")
-            else:
-                # Save the aggregated timeseries to the output directory
-                df_timeseries.to_csv(self.output_path / f"{self.id}_aggregated.csv", index_label="time")
+            # Save the aggregated timeseries to the output directory
+            df_timeseries.to_csv(self.output_path / f"{self.id}_aggregated.csv", index_label="time")
         
         return df_timeseries
