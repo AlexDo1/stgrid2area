@@ -1,1 +1,1 @@
-from .models import Area
+from .area import Area
