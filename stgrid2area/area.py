@@ -107,7 +107,7 @@ class Area():
             raise TypeError(f"{self.id}: The stgrid must be a xarray Dataset or DataArray.")
         
         # Set the crs of the geometry to the crs of the stgrid
-        geometry = self.geometry.to_crs(stgrid.rio.crs)
+        geometry = self.geometry.to_crs(stgrid.rio.crs.to_string())
 
         # Clip the stgrid to the geometry, all_touched=True to get all pixels that are at least partially in the catchment
         clipped = stgrid.rio.clip(geometry.geometry, all_touched=all_touched)
@@ -176,7 +176,7 @@ class Area():
             operations = [operations]
 
         # Set the crs of the geometry to the crs of the stgrid
-        geometry = self.geometry.to_crs(stgrid.rio.crs)
+        geometry = self.geometry.to_crs(stgrid.rio.crs.to_string())
 
         # Aggregate the clipped grid to the geometry
         df = exact_extract(stgrid, geometry, operations, output="pandas")
