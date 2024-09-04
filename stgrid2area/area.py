@@ -30,7 +30,7 @@ class Area():
         if isinstance(geometry, gpd.GeoDataFrame):
             self.geometry = geometry
         else:
-            raise TypeError("The geometry must be a GeoDataFrame or a GeoSeries.")
+            raise TypeError(f"{self.id}: The geometry must be a GeoDataFrame or a GeoSeries.")
         
         # Make output_dir a Path
         output_dir = Path(output_dir)
@@ -104,7 +104,7 @@ class Area():
         
         # Check if the stgrid is a xarray Dataset or DataArray
         if not isinstance(stgrid, (xr.Dataset, xr.DataArray)):
-            raise TypeError("The stgrid must be a xarray Dataset or DataArray.")
+            raise TypeError(f"{self.id}: The stgrid must be a xarray Dataset or DataArray.")
         
         # Set the crs of the geometry to the crs of the stgrid
         geometry = self.geometry.to_crs(stgrid.rio.crs)
@@ -165,11 +165,11 @@ class Area():
         
         # Check dimensionality of gridded data, calculating weighted statistics with exactaxtract can only be done if shape is >= (2, 2)
         if 1 in stgrid.isel(time=0).shape:
-            raise NotImplementedError("Gridded data has spatial dimensionality of 1 in at least one direction, aggregation for 1-D data is not supported at the moment.")
+            raise NotImplementedError(f"{self.id}: Gridded data has spatial dimensionality of 1 in at least one direction, aggregation for 1-D data is not supported at the moment.")
 
         # Check if the stgrid is a xarray DataArray
         if not isinstance(stgrid, xr.DataArray):
-            raise TypeError("The stgrid must be a xarray DataArray.")
+            raise TypeError(f"{self.id}: The stgrid must be a xarray DataArray.")
         
         # Check if operations is a list
         if not isinstance(operations, list):
