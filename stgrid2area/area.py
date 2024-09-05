@@ -47,7 +47,10 @@ class Area():
     @property
     def has_clip(self) -> bool:
         """
-        Check if the area already has a clipped grid in the output path.
+        Check if the area already has a clipped grid in the output path.  
+        Also checks if the clipped grid can be read by xarray, when saving the clipped grid was
+        interrupted and the file is corrupted, xarray will raise an error when trying to read the file
+        and the area is considered not to have a clipped grid.
         
         Returns
         -------
@@ -55,7 +58,11 @@ class Area():
             True if the area has a clipped grid, False otherwise.
 
         """
-        return (self.output_path / f"{self.id}_clipped.nc").exists()
+        try:
+            xr.open_dataset(self.output_path / f"{self.id}_clipped.nc")
+            return True
+        except Exception:
+            return False
     
     @property
     def has_aggregate(self) -> bool:
