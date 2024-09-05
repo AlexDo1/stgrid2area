@@ -38,6 +38,9 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     needs: build-and-test
     runs-on: ubuntu-24.04
+    environment: release
+    permissions:  
+      id-token: write # IMPORTANT: this permission is mandatory for trusted publishing
 
     steps:
       - name: Checkout code
@@ -55,6 +58,3 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
