@@ -1,4 +1,14 @@
+# pycache
 __pycache__
+
+# pytest cache
+.pytest_cache
+
+# egg-info
+*.egg-info
 
 # test directoy
 test
+
+# virtualenv
+venv
