@@ -1,15 +1,15 @@
 import os
-from typing import Union
-
+from typing import Union, List
 from dask import delayed, compute
 import pandas as pd
 import xarray as xr
 import rioxarray
+import logging
 
 from .area import Area
 
 class ParallelDaskProcessor:
-    def __init__(self, areas: list[Area], stgrid: Union[xr.Dataset, xr.DataArray], variable: Union[str, None], operations: list[str], n_workers: int = None, skip_exist: bool = False):
+    def __init__(self, areas: List[Area], stgrid: Union[xr.Dataset, xr.DataArray], variable: Union[str, None], operations: List[str], n_workers: int = None, skip_exist: bool = False):
         """
         Initialize a ParallelProcessor object.
 
@@ -42,7 +42,7 @@ class ParallelDaskProcessor:
         if isinstance(stgrid, xr.Dataset) and variable is None:
             raise ValueError("The variable must be defined if stgrid is an xr.Dataset.")
 
-    def clip_and_aggregate(self, area: Area) -> pd.DataFrame:
+    def clip_and_aggregate(self, area: Area) -> Union[pd.DataFrame, None]:
         """
         Process an area by clipping the spatiotemporal grid to the area and aggregating the variable.  
         When clipping the grid, the all_touched parameter is set to True, as the variable is aggregated with
@@ -53,23 +53,25 @@ class ParallelDaskProcessor:
         ----------
         area : Area
             The area to process.
-        variable : str
-            The variable to aggregate.
         
         Returns
         -------
-        pd.DataFrame
-            The aggregated variable.
+        pd.DataFrame or None
+            The aggregated variable, or None if an error occurred.
         
         """
-        # clip the spatiotemporal grid to the area
-        clipped = area.clip(self.stgrid, save_result=True)
+        try:
+            # Clip the spatiotemporal grid to the area
+            clipped = area.clip(self.stgrid, save_result=True)
 
-        # check if clipped is a xarray Dataset or DataArray
-        if isinstance(clipped, xr.Dataset):
-            return area.aggregate(clipped[self.variable], self.operations, save_result=True, skip_exist=self.skip_exist)
-        elif isinstance(clipped, xr.DataArray):
-            return area.aggregate(clipped, self.operations, save_result=True, skip_exist=self.skip_exist)
+            # Check if clipped is a xarray Dataset or DataArray
+            if isinstance(clipped, xr.Dataset):
+                return area.aggregate(clipped[self.variable], self.operations, save_result=True, skip_exist=self.skip_exist)
+            elif isinstance(clipped, xr.DataArray):
+                return area.aggregate(clipped, self.operations, save_result=True, skip_exist=self.skip_exist)
+        except Exception as e:
+            logging.error(f"{area.id}: Error processing area: {e}")
+            return None
 
     def run(self) -> None:
         """
@@ -78,4 +80,7 @@ class ParallelDaskProcessor:
         
         """
         tasks = [delayed(self.clip_and_aggregate)(area) for area in self.areas]
-        compute(*tasks, scheduler='processes', num_workers=self.n_workers)
+        results = compute(*tasks, scheduler='processes', num_workers=self.n_workers)
+        for result in results:
+            if result is None:
+                logging.warning("One or more tasks failed.")
