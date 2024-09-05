@@ -22,7 +22,7 @@ jobs:
 
       - name: Install stgrid2area
         run: |
-          python3 -m pip3 install --upgrade pip
+          python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt
           python3 setup.py install
 
