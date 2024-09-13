@@ -3,4 +3,4 @@ pandas
 xarray[io]
 rioxarray
 exactextract
-dask
+dask[distributed]
