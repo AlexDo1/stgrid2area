@@ -13,7 +13,7 @@ from .area import Area
 class DistributedDaskProcessor:
     def __init__(self, areas: List[Area], stgrid: Union[xr.Dataset, xr.DataArray], variable: Union[str, None], operations: List[str], n_workers: int = None, skip_exist: bool = False, log_file: str = None, log_level: str = "INFO"):
         """
-        Initialize a ParallelProcessor object.
+        Initialize a DistributedDaskProcessor object.
 
         Parameters
         ----------
