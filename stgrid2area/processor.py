@@ -101,7 +101,7 @@ class DistributedDaskProcessor:
         elif isinstance(clipped, xr.DataArray):
             return area.aggregate(clipped, self.operations, save_result=True, skip_exist=self.skip_exist)
 
-    def run(self, client: Client = None, log_level: str = "INFO") -> None:
+    def run(self, client: Client = None) -> None:
         """
         Run the parallel processing of the areas using the distributed scheduler.
         Results are saved in the output directories of the areas.
