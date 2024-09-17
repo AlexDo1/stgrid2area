@@ -106,7 +106,6 @@ class Area():
         """
         # Check if the clipping should be skipped if the clipped grid already exists
         if skip_exist and self.has_clip:
-            # timeout is needed to prevent a bug in xarray when reading the netcdf file
             return xr.open_dataset(self.output_path / f"{self.id}_clipped.nc")
         
         # Check if the stgrid is a xarray Dataset or DataArray
