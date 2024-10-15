@@ -101,7 +101,7 @@ class DistributedDaskProcessor:
         elif isinstance(clipped, xr.DataArray):
             return area.aggregate(clipped, self.operations, save_result=True, skip_exist=self.skip_exist)
 
-    def run(self, client: Client = None) -> None:
+    def run(self, client: Client = None, use_mpi: bool = False) -> None:
         """
         Run the parallel processing of the areas using the distributed scheduler.
         Results are saved in the output directories of the areas.
@@ -133,6 +133,11 @@ class DistributedDaskProcessor:
 
         # Configure logging
         self.configure_logging()
+
+        if use_mpi:
+            from dask_mpi import initialize
+            initialize() # Automatically sets up the Dask scheduler and workers in an MPI environment
+            client = Client() # Dask will automatically detect the Dask scheduler on rank 0
 
         # Use the passed client or create a local one
         client = client or Client(LocalCluster(n_workers=self.n_workers, threads_per_worker=1, dashboard_address=':8787'))
