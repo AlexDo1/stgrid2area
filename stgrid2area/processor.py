@@ -127,6 +127,9 @@ class DistributedDaskProcessor:
 
             client = Client(cluster)
             ```
+        use_mpi : bool, optional
+            If True, use the Dask MPI initializer to set up the Dask scheduler and workers in an MPI environment.  
+            If False, use the passed client or create a local one.
         
         """
         success = 0
@@ -138,9 +141,11 @@ class DistributedDaskProcessor:
             from dask_mpi import initialize
             initialize() # Automatically sets up the Dask scheduler and workers in an MPI environment
             client = Client() # Dask will automatically detect the Dask scheduler on rank 0
-
-        # Use the passed client or create a local one
-        client = client or Client(LocalCluster(n_workers=self.n_workers, threads_per_worker=1, dashboard_address=':8787'))
+            logging.info(f"Dask MPI initialized with {client.ncores()} workers")
+        else:
+            # Use the passed client or create a local one
+            client = client or Client(LocalCluster(n_workers=self.n_workers, threads_per_worker=1, dashboard_address=':8787'))
+        
         # Log the Dask dashboard address
         logging.info(f"Dask dashboard address: {client.dashboard_link}")
 
