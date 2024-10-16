@@ -127,6 +127,16 @@ class DistributedDaskProcessor:
 
             client = Client(cluster)
             ```
+
+            Example using MPI:
+            ```python
+            from dask.distributed import Client
+            from dask_mpi import initialize
+
+            initialize()
+
+            client = Client()
+            ```
         
         """
         success = 0
