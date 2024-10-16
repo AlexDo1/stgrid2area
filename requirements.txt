@@ -4,6 +4,4 @@ xarray[io]
 rioxarray
 exactextract
 dask[distributed]
-mpi4py
-dask-mpi
 bokeh
