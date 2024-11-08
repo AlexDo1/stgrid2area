@@ -7,13 +7,131 @@ import xarray as xr
 import rioxarray
 import logging
 from pathlib import Path
+import uuid
 
 from .area import Area
+
+
+class LocalDaskProcessor:
+    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False):
+        """
+        Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
+
+        Parameters
+        ----------
+        areas : list of Area
+            List of area objects to process.
+        stgrid : xr.Dataset or xr.DataArray
+            The spatiotemporal data to process.
+        variable : str
+            The variable in stgrid to aggregate.
+        method : str, optional
+            The method to use for aggregation.  
+            Can be "exact_extract", "xarray" or "fallback_xarray".  
+            "fallback_xarray" will first try to use the exact_extract method, and if this raises a ValueError, it will fall back to 
+            the xarray method.
+        operations : list of str
+            List of aggregation operations to apply.
+        n_workers : int, optional
+            Number of parallel workers to use (default: os.cpu_count()).
+        skip_exist : bool, optional
+            If True, skip processing areas that already have clipped grids or aggregated in their output directories.
+
+        """
+        self.areas = areas
+        self.stgrid = stgrid
+        self.variable = variable
+        self.method = method
+        self.operations = operations
+        self.n_workers = n_workers or os.cpu_count()
+        self.skip_exist = skip_exist
+
+        # Set up basic logging if no handler is configured
+        if not logging.getLogger().hasHandlers():
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+    def clip_and_aggregate(self, area: Area) -> Union[pd.DataFrame, Exception]:
+        """
+        Process an area by clipping the spatiotemporal grid to the area and aggregating the variable.  
+        When clipping the grid, the all_touched parameter is set to True, as the variable is aggregated with
+        the exact_extract method, which requires all pixels that are partially in the area.
+        The clipped grid and the aggregated variable are saved in the output directory of the area.  
+                
+        Parameters
+        ----------
+        area : Area
+            The area to process.
+        
+        Returns
+        -------
+        pd.DataFrame or None
+            The aggregated variable, or None if an error occurred.
+        
+        """
+        # Clip the spatiotemporal grid to the area
+        clipped = area.clip(self.stgrid, save_result=True)
+
+        # Aggregate the variable
+        if self.method in ["exact_extract", "xarray"]:
+            return area.aggregate(clipped, self.variable, self.method, self.operations, save_result=True, skip_exist=self.skip_exist)
+        elif self.method == "fallback_xarray":
+            try:
+                return area.aggregate(clipped, self.variable, "exact_extract", self.operations, save_result=True, skip_exist=self.skip_exist)
+            except ValueError:
+                logging.warning(f"Method 'exact_extract' failed for area {area.id}. Falling back to 'xarray' method.")
+                return area.aggregate(clipped, self.variable, "xarray", self.operations, save_result=True, skip_exist=self.skip_exist)
+        else:
+            raise ValueError("Invalid method. Use 'exact_extract', 'xarray' or 'fallback_xarray'.")
+        
+    def run(self) -> None:
+        """Run the parallel processing of areas using Dask."""
+        logging.info("Starting processing with LocalDaskProcessor.")
+        
+        with Client(LocalCluster(n_workers=self.n_workers, threads_per_worker=1)) as client:
+            # Log the Dask dashboard address
+            logging.info(f"Dask dashboard address: {client.dashboard_link}")
+
+            # Persist stgrid in memory to avoid repetitive scattering
+            self.stgrid = self.stgrid.persist()
+
+            # Process the areas in parallel and keep track of futures
+            tasks = [delayed(self.clip_and_aggregate)(area, dask_key_name=f"{area.id}") for area in self.areas]
+            futures = client.compute(tasks)
+            
+            counter = 0
+            success = 0
+
+            # Wait for the tasks to complete
+            for future in as_completed(futures):
+                try:
+                    # Get the result of the task
+                    result = future.result()
+                    if isinstance(result, pd.DataFrame):
+                        counter += 1
+                        success += 1
+                        logging.info(f"[{counter} / {len(self.areas)}]: {future.key} --- Processing completed")
+                except Exception as e:
+                    if logging.getLogger().level == logging.DEBUG:
+                        counter += 1
+                        logging.exception(f"[{counter} / {len(self.areas)}]: {future.key} --- An error occurred: {e}")
+                    else:
+                        counter += 1
+                        logging.error(f"[{counter} / {len(self.areas)}]: {future.key} --- An error occurred: {e}")
+        
+            logging.info(f"Processing completed and was successful for [{success} / {len(self.areas)}] areas")
+
+
 
 class DistributedDaskProcessor:
     def __init__(self, areas: List[Area], stgrid: Union[xr.Dataset, xr.DataArray], variable: Union[str, None], operations: List[str], n_workers: int = None, skip_exist: bool = False, log_file: str = None, log_level: str = "INFO"):
         """
         Initialize a DistributedDaskProcessor object.
+
+        Deprecation Warning
+        -------
+        This processor class was developed for use in a HPC environment, development has been discontinued and it is recommended to use the LocalDaskProcessor class for local processing.
+
 
         Parameters
         ----------
