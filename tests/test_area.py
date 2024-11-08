@@ -121,7 +121,7 @@ def test_aggregate(raster_data, area_data):
     clipped_ds = area.clip(raster_data)
 
     # Aggregate the clipped data spatially
-    aggregated_df = area.aggregate(clipped_ds["var"], operations=["mean", "min"])
+    aggregated_df = area.aggregate(clipped_ds, variable="var", method="exact_extract", operations=["mean", "min"])
 
     assert isinstance(aggregated_df, pd.DataFrame)
     assert not aggregated_df.empty
@@ -148,5 +148,6 @@ def test_aggregate(raster_data, area_data):
 
     # Make a dataframe with the expected values
     expected_df = pd.DataFrame({"var_mean": expected_means, "var_min": expected_mins}, index=clipped_ds.time.values)
+    expected_df.index.name = "time"
 
     assert pd.testing.assert_frame_equal(aggregated_df, expected_df, check_dtype=False) is None
