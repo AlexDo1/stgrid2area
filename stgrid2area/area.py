@@ -264,7 +264,7 @@ class Area():
                     q = int(float(col.split('=')[1].split(')')[0]) * 100)
 
                     # replace the column name
-                    df.rename(columns={col: f"{variable}_quantile{q}"}, inplace=True)                
+                    df = df.rename(columns={col: f"{variable}_quantile{q}"})         
 
         # Concatenate the dataframes
         df_timeseries = pd.concat(sliced_dfs, axis=1)
