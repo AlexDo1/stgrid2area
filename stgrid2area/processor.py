@@ -13,7 +13,7 @@ from .area import Area
 
 
 class LocalDaskProcessor:
-    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False):
+    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False, logger: logging.Logger = None):
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
@@ -36,6 +36,8 @@ class LocalDaskProcessor:
             Number of parallel workers to use (default: os.cpu_count()).
         skip_exist : bool, optional
             If True, skip processing areas that already have clipped grids or aggregated in their output directories.
+        logger : logging.Logger, optional
+            Logger to use for logging. If None, a basic logger will be set up.
 
         """
         self.areas = areas
@@ -45,11 +47,11 @@ class LocalDaskProcessor:
         self.operations = operations
         self.n_workers = n_workers or os.cpu_count()
         self.skip_exist = skip_exist
+        self.logger = logger
 
         # Set up basic logging if no handler is configured
-        if not logging.getLogger().hasHandlers():
-            logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+        if not self.logger.hasHandlers():
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     def clip_and_aggregate(self, area: Area) -> Union[pd.DataFrame, Exception]:
         """
@@ -85,7 +87,10 @@ class LocalDaskProcessor:
             raise ValueError("Invalid method. Use 'exact_extract', 'xarray' or 'fallback_xarray'.")
         
     def run(self) -> None:
-        """Run the parallel processing of areas using Dask."""
+        """
+        Run the parallel processing of areas using Dask.
+        
+        """
         logging.info("Starting processing with LocalDaskProcessor.")
         
         with Client(LocalCluster(n_workers=self.n_workers, threads_per_worker=1)) as client:
