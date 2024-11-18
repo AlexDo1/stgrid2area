@@ -7,13 +7,13 @@ import xarray as xr
 import rioxarray
 import logging
 from pathlib import Path
-import uuid
+import numpy as np
 
 from .area import Area
 
 
 class LocalDaskProcessor:
-    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False, logger: logging.Logger = None):
+    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False, chunk_size: int = None, logger: logging.Logger = None):
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
@@ -36,6 +36,9 @@ class LocalDaskProcessor:
             Number of parallel workers to use (default: os.cpu_count()).
         skip_exist : bool, optional
             If True, skip processing areas that already have clipped grids or aggregated in their output directories.
+        chunk_size : int, optional
+            Number of areas to process in each chunk. Default: process all areas at once.  
+            If the number of areas is large, it may be necessary to process them in smaller chunks to avoid memory issues.
         logger : logging.Logger, optional
             Logger to use for logging. If None, a basic logger will be set up.
 
@@ -48,6 +51,7 @@ class LocalDaskProcessor:
         self.n_workers = n_workers or os.cpu_count()
         self.skip_exist = skip_exist
         self.logger = logger
+        self.chunk_size = chunk_size or len(areas)  # Default: process all areas at once
 
         # Set up basic logging if no handler is configured
         if not self.logger:
@@ -55,7 +59,7 @@ class LocalDaskProcessor:
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
 
-    def clip_and_aggregate(self, area: Area) -> Union[pd.DataFrame, Exception]:
+    def clip_and_aggregate(self, area: Area, stgrid: xr.Dataset) -> Union[pd.DataFrame, Exception]:
         """
         Process an area by clipping the spatiotemporal grid to the area and aggregating the variable.  
         When clipping the grid, the all_touched parameter is set to True, as the variable is aggregated with
@@ -66,6 +70,7 @@ class LocalDaskProcessor:
         ----------
         area : Area
             The area to process.
+
         
         Returns
         -------
@@ -74,7 +79,7 @@ class LocalDaskProcessor:
         
         """
         # Clip the spatiotemporal grid to the area
-        clipped = area.clip(self.stgrid, save_result=True)
+        clipped = area.clip(stgrid, save_result=True)
 
         # Aggregate the variable
         if self.method in ["exact_extract", "xarray"]:
@@ -84,14 +89,16 @@ class LocalDaskProcessor:
                 return area.aggregate(clipped, self.variable, "exact_extract", self.operations, save_result=True, skip_exist=self.skip_exist)
             except ValueError:
                 self.logger.warning(f"Method 'exact_extract' failed for area {area.id}. Falling back to 'xarray' method.")
+                # add a file "fallback_xarray" to the output directory to indicate that the fallback method was used
+                Path(area.output_path, "fallback_xarray").touch()
                 return area.aggregate(clipped, self.variable, "xarray", self.operations, save_result=True, skip_exist=self.skip_exist)
         else:
             raise ValueError("Invalid method. Use 'exact_extract', 'xarray' or 'fallback_xarray'.")
         
     def run(self) -> None:
         """
-        Run the parallel processing of areas using Dask.
-        
+        Run the parallel processing of areas using Dask with chunking.
+
         """
         self.logger.info("Starting processing with LocalDaskProcessor.")
         
@@ -101,37 +108,45 @@ class LocalDaskProcessor:
                     # Log the Dask dashboard address
                     self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
 
-                    # Persist stgrid in memory to avoid repetitive scattering
-                    self.stgrid = self.stgrid.persist()
+                    # Split areas into chunks
+                    area_chunks = np.array_split(self.areas, max(1, len(self.areas) // self.chunk_size))
+                    self.logger.info(f"Processing {len(self.areas)} areas in {len(area_chunks)} chunks.")
 
-                    # Process the areas in parallel and keep track of futures
-                    tasks = [delayed(self.clip_and_aggregate)(area, dask_key_name=f"{area.id}") for area in self.areas]
-                    futures = client.compute(tasks)
-                    
-                    counter = 0
-                    success = 0
+                    total_areas = len(self.areas)
+                    counter, success = 0, 0
 
-                    # Wait for the tasks to complete
-                    for future in as_completed(futures):
-                        try:
-                            # Get the result of the task
-                            result = future.result()
-                            if isinstance(result, pd.DataFrame):
+                    for i, chunk in enumerate(area_chunks, start=1):
+                        self.logger.info(f"Processing chunk {i}/{len(area_chunks)} with {len(chunk)} areas.")
+
+                        # Pre-clip the stgrid to the area chunk before persisting to be memory efficient
+                        stgrid_chunk = self.stgrid.rio.clip(pd.concat([area.geometry for area in chunk]).geometry.to_crs(self.stgrid.rio.crs), all_touched=True).persist()
+                        
+                        # Create tasks for this chunk
+                        tasks = [delayed(self.clip_and_aggregate)(area, stgrid_chunk, dask_key_name=f"{area.id}") for area in chunk]
+
+
+                        # tasks = [delayed(self.clip_and_aggregate)(area, dask_key_name=f"{area.id}") for area in chunk]
+
+                        # Compute the tasks for this chunk
+                        futures = client.compute(tasks)
+                        
+                        for future in as_completed(futures):
+                            try:
+                                result = future.result()
+                                if isinstance(result, pd.DataFrame):
+                                    success += 1
+                                    self.logger.info(f"[{success}/{total_areas}]: {future.key} --- Processing completed.")
+                            except Exception as e:
+                                self.logger.error(f"[{counter + 1}/{total_areas}]: {future.key} --- Error occurred: {e}")
+                            finally:
                                 counter += 1
-                                success += 1
-                                self.logger.info(f"[{counter} / {len(self.areas)}]: {future.key} --- Processing completed")
-                        except Exception as e:
-                            if self.logger.getLogger().level == self.logger.DEBUG:
-                                counter += 1
-                                self.logger.exception(f"[{counter} / {len(self.areas)}]: {future.key} --- An error occurred: {e}")
-                            else:
-                                counter += 1
-                                self.logger.error(f"[{counter} / {len(self.areas)}]: {future.key} --- An error occurred: {e}")
-                
-                    self.logger.info(f"Processing completed and was successful for [{success} / {len(self.areas)}] areas")
+                            
+                        # cleanup memory
+                        del stgrid_chunk
+
+                    self.logger.info(f"Processing completed: {success}/{total_areas} areas processed successfully.")
                 finally:
                     self.logger.info("Shutting down Dask client and cluster.")
-
 
 
 class DistributedDaskProcessor:
