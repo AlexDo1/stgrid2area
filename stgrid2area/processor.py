@@ -140,6 +140,9 @@ class LocalDaskProcessor:
                             
                         # cleanup memory
                         del stgrid_chunk
+                        del futures
+                        del tasks
+                        del batch
 
                     self.logger.info(f"Processing completed: {success}/{total_areas} areas processed successfully.")
                 finally:
