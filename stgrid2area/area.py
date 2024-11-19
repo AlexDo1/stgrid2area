@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Union
+import warnings
 
 import geopandas as gpd
 import pandas as pd
@@ -241,7 +242,10 @@ class Area():
         geometry = self.geometry.to_crs(stgrid.rio.crs.to_string())
 
         # Aggregate the clipped grid to the geometry
-        df = exact_extract(stgrid, geometry, operations, output="pandas")
+        with warnings.catch_warnings():
+            # Suppress the warning that the spatial reference system of the input features does not exactly match the raster, see https://github.com/isciences/exactextract/issues/159
+            warnings.filterwarnings("ignore", message="Spatial reference system of input features does not exactly match raster.")
+            df = exact_extract(stgrid, geometry, operations, output="pandas")
 
         # Transpose dataframe
         df = df.T
