@@ -13,7 +13,7 @@ from .area import Area
 
 
 class LocalDaskProcessor:
-    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False, chunk_size: int = None, logger: logging.Logger = None):
+    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
@@ -36,9 +36,9 @@ class LocalDaskProcessor:
             Number of parallel workers to use (default: os.cpu_count()).
         skip_exist : bool, optional
             If True, skip processing areas that already have clipped grids or aggregated in their output directories.
-        chunk_size : int, optional
-            Number of areas to process in each chunk. Default: process all areas at once.  
-            If the number of areas is large, it may be necessary to process them in smaller chunks to avoid memory issues.
+        batch_size : int, optional
+            Number of areas to process in each batch. Default: process all areas at once.  
+            If the number of areas is large, it may be necessary to process them in smaller batches to avoid memory issues.
         logger : logging.Logger, optional
             Logger to use for logging. If None, a basic logger will be set up.
 
@@ -51,7 +51,7 @@ class LocalDaskProcessor:
         self.n_workers = n_workers or os.cpu_count()
         self.skip_exist = skip_exist
         self.logger = logger
-        self.chunk_size = chunk_size or len(areas)  # Default: process all areas at once
+        self.batch_size = batch_size or len(areas)  # Default: process all areas at once
 
         # Set up basic logging if no handler is configured
         if not self.logger:
@@ -97,7 +97,7 @@ class LocalDaskProcessor:
         
     def run(self) -> None:
         """
-        Run the parallel processing of areas using Dask with chunking.
+        Run the parallel processing of areas using Dask with batching.
 
         """
         self.logger.info("Starting processing with LocalDaskProcessor.")
@@ -108,26 +108,23 @@ class LocalDaskProcessor:
                     # Log the Dask dashboard address
                     self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
 
-                    # Split areas into chunks
-                    area_chunks = np.array_split(self.areas, max(1, len(self.areas) // self.chunk_size))
-                    self.logger.info(f"Processing {len(self.areas)} areas in {len(area_chunks)} chunks.")
+                    # Split areas into batches
+                    area_batches = np.array_split(self.areas, max(1, len(self.areas) // self.batch_size))
+                    self.logger.info(f"Processing {len(self.areas)} areas in {len(area_batches)} batches.")
 
                     total_areas = len(self.areas)
                     counter, success = 0, 0
 
-                    for i, chunk in enumerate(area_chunks, start=1):
-                        self.logger.info(f"Processing chunk {i}/{len(area_chunks)} with {len(chunk)} areas.")
+                    for i, batch in enumerate(area_batches, start=1):
+                        self.logger.info(f"Processing batch {i}/{len(area_batches)} with {len(batch)} areas.")
 
-                        # Pre-clip the stgrid to the area chunk before persisting to be memory efficient
-                        stgrid_chunk = self.stgrid.rio.clip(pd.concat([area.geometry for area in chunk]).geometry.to_crs(self.stgrid.rio.crs), all_touched=True).persist()
+                        # Pre-clip the stgrid to the area batch before persisting to be memory efficient
+                        stgrid_chunk = self.stgrid.rio.clip(pd.concat([area.geometry for area in batch]).geometry.to_crs(self.stgrid.rio.crs), all_touched=True).persist()
                         
-                        # Create tasks for this chunk
-                        tasks = [delayed(self.clip_and_aggregate)(area, stgrid_chunk, dask_key_name=f"{area.id}") for area in chunk]
+                        # Create tasks for this batch
+                        tasks = [delayed(self.clip_and_aggregate)(area, stgrid_chunk, dask_key_name=f"{area.id}") for area in batch]
 
-
-                        # tasks = [delayed(self.clip_and_aggregate)(area, dask_key_name=f"{area.id}") for area in chunk]
-
-                        # Compute the tasks for this chunk
+                        # Compute the tasks for this batch
                         futures = client.compute(tasks)
                         
                         for future in as_completed(futures):
