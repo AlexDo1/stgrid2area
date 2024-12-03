@@ -1,5 +1,5 @@
 import os
-from typing import Union, List
+from typing import Union
 from dask import delayed
 from dask.distributed import Client, LocalCluster, as_completed
 import pandas as pd
@@ -13,7 +13,7 @@ from .area import Area
 
 
 class LocalDaskProcessor:
-    def __init__(self, areas: List[Area], stgrid: xr.Dataset, variable: str, method: str, operations: List[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
+    def __init__(self, areas: list[Area], stgrid: xr.Dataset, variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
@@ -22,7 +22,9 @@ class LocalDaskProcessor:
         areas : list of Area
             List of area objects to process.
         stgrid : xr.Dataset or xr.DataArray
-            The spatiotemporal data to process.
+            The spatiotemporal data to process.  
+            If stgrid is a list of xr.Dataset or xr.DataArray, the processor will process each one in turn. Splitting the data into multiple
+            xr.Dataset or xr.DataArray objects can be useful when the spatiotemporal data is too large to fit into memory.
         variable : str
             The variable in stgrid to aggregate.
         method : str, optional
@@ -44,7 +46,12 @@ class LocalDaskProcessor:
 
         """
         self.areas = areas
-        self.stgrid = stgrid
+        if isinstance(stgrid, xr.Dataset) or isinstance(stgrid, xr.DataArray):
+            self.stgrid = [stgrid]
+        elif isinstance(stgrid, list):
+            self.stgrid = stgrid
+        else:
+            raise ValueError("stgrid must be an xr.Dataset, xr.DataArray or a list of xr.Dataset or xr.DataArray.")
         self.variable = variable
         self.method = method
         self.operations = operations
@@ -59,7 +66,7 @@ class LocalDaskProcessor:
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
 
-    def clip_and_aggregate(self, area: Area, stgrid: xr.Dataset) -> Union[pd.DataFrame, Exception]:
+    def clip_and_aggregate(self, area: Area, stgrid: xr.Dataset, filename_clip: str = None, filename_aggr: str = None) -> Union[pd.DataFrame, Exception]:
         """
         Process an area by clipping the spatiotemporal grid to the area and aggregating the variable.  
         When clipping the grid, the all_touched parameter is set to True, as the variable is aggregated with
@@ -70,87 +77,109 @@ class LocalDaskProcessor:
         ----------
         area : Area
             The area to process.
-
+        stgrid : xr.Dataset
+            The spatiotemporal grid to clip to the area.
+        filename_clip : str, optional
+            The filename to save the clipped grid to. If None, a default filename will be used.  
+            Important when processing multiple spatiotemporal grids to avoid overwriting files.
+        filename_aggr : str, optional
+            The filename to save the aggregated variable to. If None, a default filename will be used.  
+            Important when processing multiple spatiotemporal grids to avoid overwriting files.
         
         Returns
         -------
-        pd.DataFrame or None
-            The aggregated variable, or None if an error occurred.
+        pd.DataFrame
+            The aggregated variable as a DataFrame.
         
         """
+        # Parse the filenames, check if ends with .nc or .csv
+        if filename_clip is None:
+            filename_clip = f"{area.id}_clipped.nc"
+        elif not filename_clip.endswith(".nc"):
+            filename_clip = f"{filename_clip}_clipped.nc"
+
+        if filename_aggr is None:
+            filename_aggr = f"{area.id}_aggregated.csv"
+        elif not filename_aggr.endswith(".csv"):
+            filename_aggr = f"{filename_aggr}_aggregated.csv"
+
         # Clip the spatiotemporal grid to the area
-        clipped = area.clip(stgrid, save_result=True)
+        clipped = area.clip(stgrid, save_result=True, skip_exist=self.skip_exist, filename=filename_clip)
 
         # Aggregate the variable
         if self.method in ["exact_extract", "xarray"]:
-            return area.aggregate(clipped, self.variable, self.method, self.operations, save_result=True, skip_exist=self.skip_exist)
+            return area.aggregate(clipped, self.variable, self.method, self.operations, save_result=True, skip_exist=self.skip_exist, filename=filename_aggr)
         elif self.method == "fallback_xarray":
             try:
-                return area.aggregate(clipped, self.variable, "exact_extract", self.operations, save_result=True, skip_exist=self.skip_exist)
+                return area.aggregate(clipped, self.variable, "exact_extract", self.operations, save_result=True, skip_exist=self.skip_exist, filename=filename_aggr)
             except ValueError:
                 self.logger.warning(f"Method 'exact_extract' failed for area {area.id}. Falling back to 'xarray' method.")
                 # add a file "fallback_xarray" to the output directory to indicate that the fallback method was used
                 Path(area.output_path, "fallback_xarray").touch()
-                return area.aggregate(clipped, self.variable, "xarray", self.operations, save_result=True, skip_exist=self.skip_exist)
+                return area.aggregate(clipped, self.variable, "xarray", self.operations, save_result=True, skip_exist=self.skip_exist, filename=filename_aggr)
         else:
             raise ValueError("Invalid method. Use 'exact_extract', 'xarray' or 'fallback_xarray'.")
         
     def run(self) -> None:
         """
         Run the parallel processing of areas using Dask with batching.
-
+        
         """
         self.logger.info("Starting processing with LocalDaskProcessor.")
         
         with LocalCluster(n_workers=self.n_workers, threads_per_worker=1) as cluster:
             with Client(cluster) as client:
                 try:
-                    # Log the Dask dashboard address
                     self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
-
+                    
                     # Split areas into batches
                     area_batches = np.array_split(self.areas, max(1, len(self.areas) // self.batch_size))
                     self.logger.info(f"Processing {len(self.areas)} areas in {len(area_batches)} batches.")
 
                     total_areas = len(self.areas)
-                    counter, success = 0, 0
+                    area_success = {area.id: 0 for area in self.areas}  # Track success count per area
+                    total_stgrids = len(self.stgrid)
+                    processed_areas = 0
 
+                    # Process each batch of areas
                     for i, batch in enumerate(area_batches, start=1):
                         self.logger.info(f"Processing batch {i}/{len(area_batches)} with {len(batch)} areas.")
 
-                        # Pre-clip the stgrid to the area batch before persisting to be memory efficient
-                        stgrid_chunk = self.stgrid.rio.clip(pd.concat([area.geometry for area in batch]).geometry.to_crs(self.stgrid.rio.crs), all_touched=True).persist()
-                        
-                        # Create tasks for this batch
-                        tasks = [delayed(self.clip_and_aggregate)(area, stgrid_chunk, dask_key_name=f"{area.id}") for area in batch]
-
-                        # Compute the tasks for this batch
-                        futures = client.compute(tasks)
-                        
-                        for future in as_completed(futures):
-                            try:
-                                result = future.result()
-                                if isinstance(result, pd.DataFrame):
-                                    success += 1
-                                    self.logger.info(f"[{success}/{total_areas}]: {future.key} --- Processing completed.")
-                            except Exception as e:
-                                self.logger.error(f"[{counter + 1}/{total_areas}]: {future.key} --- Error occurred: {e}")
-                            finally:
-                                counter += 1
+                        # Process each spatiotemporal grid in turn
+                        for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
+                            stgrid_pre = stgrid.rio.clip(pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), all_touched=True).persist()
                             
-                        # cleanup memory
-                        del stgrid_chunk
-                        del futures
-                        del tasks
-                        del batch
+                            tasks = [delayed(self.clip_and_aggregate)(area, stgrid_pre, 
+                                                                    filename_clip=f"{area.id}_{n_stgrid}_clipped.nc", 
+                                                                    filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv", 
+                                                                    dask_key_name=f"{area.id}_{n_stgrid}") for area in batch]
 
-                    self.logger.info(f"Processing completed: {success}/{total_areas} areas processed successfully.")
+                            futures = client.compute(tasks)
+                            
+                            for future in as_completed(futures):
+                                area_id = future.key.split('_')[0]  # Extract area ID from the key
+                                try:
+                                    result = future.result()
+                                    if isinstance(result, pd.DataFrame):
+                                        area_success[area_id] += 1
+                                        # Only log success when all stgrids for an area are processed
+                                        if area_success[area_id] == total_stgrids:
+                                            processed_areas += 1
+                                            self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
+                                except Exception as e:
+                                    self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
+                                
+                            del futures, tasks, stgrid_pre
+
+                    # Final summary
+                    successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
+                    self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
                 finally:
                     self.logger.info("Shutting down Dask client and cluster.")
 
 
 class DistributedDaskProcessor:
-    def __init__(self, areas: List[Area], stgrid: Union[xr.Dataset, xr.DataArray], variable: Union[str, None], operations: List[str], n_workers: int = None, skip_exist: bool = False, log_file: str = None, log_level: str = "INFO"):
+    def __init__(self, areas: list[Area], stgrid: Union[xr.Dataset, xr.DataArray], variable: Union[str, None], operations: list[str], n_workers: int = None, skip_exist: bool = False, log_file: str = None, log_level: str = "INFO"):
         """
         Initialize a DistributedDaskProcessor object.
 

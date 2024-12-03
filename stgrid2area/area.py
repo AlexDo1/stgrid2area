@@ -45,40 +45,7 @@ class Area():
     def __str__(self):
         return f"Area with id {self.id}"
 
-    @property
-    def has_clip(self) -> bool:
-        """
-        Check if the area already has a clipped grid in the output path.  
-        Also checks if the clipped grid can be read by xarray, when saving the clipped grid was
-        interrupted and the file is corrupted, xarray will raise an error when trying to read the file
-        and the area is considered not to have a clipped grid.
-        
-        Returns
-        -------
-        bool
-            True if the area has a clipped grid, False otherwise.
-
-        """
-        try:
-            xr.open_dataset(self.output_path / f"{self.id}_clipped.nc")
-            return True
-        except Exception:
-            return False
-    
-    @property
-    def has_aggregate(self) -> bool:
-        """
-        Check if the area already has an aggregated csv file in the output path.
-        
-        Returns
-        -------
-        bool
-            True if the area has an aggregated grid, False otherwise.
-
-        """
-        return (self.output_path / f"{self.id}_aggregated.csv").exists()
-
-    def clip(self, stgrid: Union[xr.Dataset, xr.DataArray], all_touched: bool = True, save_result: bool = False, skip_exist: bool = False) -> xr.Dataset:
+    def clip(self, stgrid: Union[xr.Dataset, xr.DataArray], all_touched: bool = True, save_result: bool = False, skip_exist: bool = False, filename: str = None) -> xr.Dataset:
         """
         Clip the spatiotemporal grid to the area's geometry.
 
@@ -98,6 +65,10 @@ class Area():
             If True, the clipping will be skipped if the clipped grid already exists. 
             In this case, the existing clipped grid will be returned.
             The default is False.
+        filename : str, optional
+            The filename of the clipped grid when written to disk.  
+            If None, the filename will be the id of the area + "_clipped.nc".  
+            The default is None.
 
         Returns
         -------
@@ -105,9 +76,15 @@ class Area():
             The clipped spatiotemporal grid.
 
         """
+        # Parse the filename
+        if filename is None:
+            filename = f"{self.id}_clipped.nc"
+        elif not filename.endswith(".nc"):
+            filename = f"{filename}.nc"
+
         # Check if the clipping should be skipped if the clipped grid already exists
-        if skip_exist and self.has_clip:
-            return xr.open_dataset(self.output_path / f"{self.id}_clipped.nc")
+        if skip_exist and (self.output_path / filename).exists():
+            return xr.open_dataset(self.output_path / filename)
         
         # Check if the stgrid is a xarray Dataset or DataArray
         if not isinstance(stgrid, (xr.Dataset, xr.DataArray)):
@@ -126,15 +103,15 @@ class Area():
             
             try:
                 # Save the clipped grid to the output directory
-                clipped.to_netcdf(self.output_path / f"{self.id}_clipped.nc")
+                clipped.to_netcdf(self.output_path / filename)
             # xarray PermissionError: delete existing file before saving
             except PermissionError:
-                os.remove(self.output_path / f"{self.id}_clipped.nc")
-                clipped.to_netcdf(self.output_path / f"{self.id}_clipped.nc")
+                os.remove(self.output_path / filename)
+                clipped.to_netcdf(self.output_path / filename)
         
         return clipped
     
-    def aggregate(self, stgrid: xr.Dataset, variable: str, method: str, operations: list[str], save_result: bool = False, skip_exist: bool = False) -> pd.DataFrame:
+    def aggregate(self, stgrid: xr.Dataset, variable: str, method: str, operations: list[str], save_result: bool = False, skip_exist: bool = False, filename: str = None) -> pd.DataFrame:
         """
         Wrapper function to aggregate the spatiotemporal grid to the area's geometry using either the exact_extract or xarray method.  
         Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped
@@ -168,6 +145,10 @@ class Area():
             If True, the aggregation will be skipped if the aggregated timeseries already exists.  
             In this case, the existing timeseries grid will be returned.  
             The default is False.
+        filename : str, optional
+            The filename of the aggregated grid when written to disk.  
+            If None, the filename will be the id of the area + "_aggregated.csv".  
+            The default is None.
 
         Returns
         -------
@@ -175,9 +156,15 @@ class Area():
             The aggregated spatiotemporal grid.
 
         """
+        # Parse the filename
+        if filename is None:
+            filename = f"{self.id}_aggregated.csv"
+        elif not filename.endswith(".csv"):
+            filename = f"{filename}.csv"
+
         # Check if the aggregation should be skipped if the aggregated grid already exists
-        if skip_exist and self.has_aggregate:
-            return pd.read_csv(self.output_path / f"{self.id}_aggregated.csv", index_col="time")
+        if skip_exist and (self.output_path / filename).exists():
+            return pd.read_csv(self.output_path / filename, index_col="time")
         
         # Check if the stgrid is a xarray Dataset
         if not isinstance(stgrid, xr.Dataset):
@@ -194,13 +181,22 @@ class Area():
         stgrid = stgrid.load()
 
         if method == "exact_extract":
-            return self._aggregate_exact_extract(stgrid, variable, operations, save_result, skip_exist)
+            df_timeseries = self._aggregate_exact_extract(stgrid, variable, operations)
         elif method == "xarray":
-            return self._aggregate_xarray(stgrid, variable, operations, save_result, skip_exist)
+            df_timeseries = self._aggregate_xarray(stgrid, variable, operations)
         else:
             raise ValueError(f"{self.id}: The method {method} is not supported. Use 'exact_extract', 'xarray'.")
     
-    def _aggregate_exact_extract(self, stgrid: xr.DataArray, variable: str, operations: list[str], save_result: bool = False, skip_exist: bool = False) -> pd.DataFrame:
+        if save_result:
+            # Create the output directory if it does not exist
+            self.output_path.mkdir(parents=True, exist_ok=True)
+
+            # Save the aggregated timeseries to the output directory
+            df_timeseries.to_csv(self.output_path / filename, index_label="time")
+
+        return df_timeseries
+
+    def _aggregate_exact_extract(self, stgrid: xr.DataArray, variable: str, operations: list[str]) -> pd.DataFrame:
         """
         Aggregate the spatiotemporal grid to the area's geometry.  
         Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped  
@@ -220,13 +216,6 @@ class Area():
             The operations to use for aggregation.  
             Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
             supported by the [exact_extract](https://github.com/isciences/exactextract) package.
-        save_result : bool, optional
-            If True, the aggregated timeseries will be saved to the output directory of the area.  
-            The default is False.
-        skip_exist : bool, optional
-            If True, the aggregation will be skipped if the aggregated timeseries already exists.  
-            In this case, the existing timeseries grid will be returned.  
-            The default is False.
 
         Returns
         -------
@@ -275,18 +264,10 @@ class Area():
 
         # Label the index
         df_timeseries.index.name = "time"
-
-        # Save the aggregated grid to the output directory of the area
-        if save_result:
-             # Create the output directory if it does not exist
-            self.output_path.mkdir(parents=True, exist_ok=True)
-
-            # Save the aggregated timeseries to the output directory
-            df_timeseries.to_csv(self.output_path / f"{self.id}_aggregated.csv", index_label="time")
         
         return df_timeseries
     
-    def _aggregate_xarray(self, stgrid: xr.DataArray, variable: str, operations: list[str], save_result: bool = False, skip_exist: bool = False) -> pd.DataFrame:
+    def _aggregate_xarray(self, stgrid: xr.DataArray, variable: str, operations: list[str]) -> pd.DataFrame:
         """
         Aggregate the spatiotemporal grid to the area's geometry.  
         Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped  
@@ -358,12 +339,4 @@ class Area():
         # Label the index
         df_timeseries.index.name = "time"
 
-        # Save the aggregated grid to the output directory of the area
-        if save_result:
-             # Create the output directory if it does not exist
-            self.output_path.mkdir(parents=True, exist_ok=True)
-
-            # Save the aggregated timeseries to the output directory
-            df_timeseries.to_csv(self.output_path / f"{self.id}_aggregated.csv", index_label="time")
-        
         return df_timeseries
