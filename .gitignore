@@ -12,3 +12,4 @@ test
 
 # virtualenv
 venv
+.vscode/settings.json
