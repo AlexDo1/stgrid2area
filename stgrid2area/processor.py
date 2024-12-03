@@ -150,8 +150,8 @@ class LocalDaskProcessor:
                             stgrid_pre = stgrid.rio.clip(pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), all_touched=True).persist()
                             
                             tasks = [delayed(self.clip_and_aggregate)(area, stgrid_pre, 
-                                                                    filename_clip=f"{area.id}_{n_stgrid}_clipped.nc", 
-                                                                    filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv", 
+                                                                    filename_clip=f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc", 
+                                                                    filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv", 
                                                                     dask_key_name=f"{area.id}_{n_stgrid}") for area in batch]
 
                             futures = client.compute(tasks)
