@@ -13,7 +13,7 @@ from .area import Area
 
 
 class LocalDaskProcessor:
-    def __init__(self, areas: list[Area], stgrid: xr.Dataset, variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
+    def __init__(self, areas: list[Area], stgrid: Union[xr.Dataset | xr.DataArray, list[xr.Dataset | xr.DataArray]], variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
@@ -147,12 +147,21 @@ class LocalDaskProcessor:
 
                         # Process each spatiotemporal grid in turn
                         for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
-                            stgrid_pre = stgrid.rio.clip(pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), all_touched=True).persist()
+                            # Use delayed to handle the clipping
+                            stgrid_pre = delayed(stgrid.rio.clip)(
+                                pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), 
+                                all_touched=True
+                            )
                             
-                            tasks = [delayed(self.clip_and_aggregate)(area, stgrid_pre, 
-                                                                    filename_clip=f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc", 
-                                                                    filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv", 
-                                                                    dask_key_name=f"{area.id}_{n_stgrid}") for area in batch]
+                            # Process each area in the batch
+                            tasks = [
+                                delayed(self.clip_and_aggregate)(
+                                    area, stgrid_pre, 
+                                    filename_clip=f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc", 
+                                    filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv", 
+                                    dask_key_name=f"{area.id}_{n_stgrid}"
+                                ) for area in batch
+                            ]
 
                             futures = client.compute(tasks)
                             
