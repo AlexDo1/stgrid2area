@@ -1,5 +1,6 @@
 import os
 from typing import Union
+import gc
 from dask import delayed
 from dask.distributed import Client, LocalCluster, as_completed
 import pandas as pd
@@ -178,7 +179,11 @@ class LocalDaskProcessor:
                                 except Exception as e:
                                     self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
                                 
+                            # Cleanup futures and persisted data
+                            client.cancel(futures)
+                            client.cancel(stgrid_pre)
                             del futures, tasks, stgrid_pre
+                            gc.collect()
 
                     # Final summary
                     successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
