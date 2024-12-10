@@ -31,7 +31,7 @@ class Area():
         if isinstance(geometry, gpd.GeoDataFrame):
             self.geometry = geometry
         else:
-            raise TypeError(f"{self.id}: The geometry must be a GeoDataFrame or a GeoSeries.")
+            raise TypeError(f"{self.id}: The geometry must be a GeoDataFrame.")
         
         # Make output_dir a Path
         output_dir = Path(output_dir)
