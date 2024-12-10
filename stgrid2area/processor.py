@@ -147,11 +147,11 @@ class LocalDaskProcessor:
 
                         # Process each spatiotemporal grid in turn
                         for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
-                            # Use delayed to handle the clipping
+                            # Use delayed to handle the pre-clipping to the area batch
                             stgrid_pre = delayed(stgrid.rio.clip)(
                                 pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), 
                                 all_touched=True
-                            )
+                            ).persist()
                             
                             # Process each area in the batch
                             tasks = [
