@@ -127,7 +127,7 @@ class LocalDaskProcessor:
         
         """
         self.logger.info("Starting processing with LocalDaskProcessor.")
-        
+
         with LocalCluster(n_workers=self.n_workers, threads_per_worker=1) as cluster:
             with Client(cluster) as client:
                 try:
@@ -146,50 +146,59 @@ class LocalDaskProcessor:
                     for i, batch in enumerate(area_batches, start=1):
                         self.logger.info(f"Processing batch {i}/{len(area_batches)} with {len(batch)} areas.")
 
-                        # Process each spatiotemporal grid in turn
                         for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
-                            # pre-clip the stgrid to the batch of areas
-                            stgrid_pre = stgrid.rio.clip(
-                                pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), 
-                                all_touched=True
+                            try:
+                                # Pre-clip the stgrid to the batch of areas
+                                stgrid_pre = stgrid.rio.clip(
+                                    pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), 
+                                    all_touched=True
                                 ).persist()
-                            
-                            # Process each area in the batch
-                            tasks = [
-                                delayed(self.clip_and_aggregate)(
-                                    area, stgrid_pre, 
-                                    filename_clip=f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc", 
-                                    filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv", 
-                                    dask_key_name=f"{area.id}_{n_stgrid}"
-                                ) for area in batch
-                            ]
 
-                            futures = client.compute(tasks)
-                            
-                            for future in as_completed(futures):
-                                area_id = future.key.split('_')[0]  # Extract area ID from the key
-                                try:
-                                    result = future.result()
-                                    if isinstance(result, pd.DataFrame):
-                                        area_success[area_id] += 1
-                                        # Only log success when all stgrids for an area are processed
-                                        if area_success[area_id] == total_stgrids:
-                                            processed_areas += 1
-                                            self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
-                                except Exception as e:
-                                    self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
-                                
-                            # Cleanup futures and persisted data
-                            client.cancel(futures)
-                            client.cancel(stgrid_pre)
-                            del futures, tasks, stgrid_pre
-                            gc.collect()
+                                # Process each area in the batch
+                                tasks = [
+                                    delayed(self.clip_and_aggregate)(
+                                        area, stgrid_pre, 
+                                        filename_clip=f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc", 
+                                        filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv", 
+                                        dask_key_name=f"{area.id}_{n_stgrid}"
+                                    ) for area in batch
+                                ]
+
+                                futures = client.compute(tasks)
+
+                                for future in as_completed(futures):
+                                    area_id = future.key.split('_')[0]  # Extract area ID from the key
+                                    try:
+                                        result = future.result()
+                                        if isinstance(result, pd.DataFrame):
+                                            area_success[area_id] += 1
+                                            # Only log success when all stgrids for an area are processed
+                                            if area_success[area_id] == total_stgrids:
+                                                processed_areas += 1
+                                                self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
+                                    except Exception as e:
+                                        self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
+
+                                # Cleanup futures and persisted data
+                                client.cancel(futures)
+                                client.cancel(stgrid_pre)
+                                del futures, tasks, stgrid_pre
+                                gc.collect()
+
+                            except Exception as e:
+                                self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
+
+                        # Restart the Dask client and cluster after the batch
+                        self.logger.info(f"Memory usage before restart: {client.memory_usage()}")
+                        client.restart()
+                        self.logger.info(f"Memory usage after restart: {client.memory_usage()}")
 
                     # Final summary
                     successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
                     self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
                 finally:
                     self.logger.info("Shutting down Dask client and cluster.")
+
 
 
 class DistributedDaskProcessor:
