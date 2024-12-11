@@ -189,13 +189,14 @@ class LocalDaskProcessor:
                                 self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
 
                         # Restart the Dask client and cluster after the batch
-                        self.logger.info(f"Memory usage before restart: {client.memory_usage()}")
                         client.restart()
-                        self.logger.info(f"Memory usage after restart: {client.memory_usage()}")
+                        self.logger.info(f"Finished batch {i}/{len(area_batches)}. Restarted Dask client and cluster for the next batch.\n")
 
                     # Final summary
                     successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
                     self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
+                except Exception as e:
+                    self.logger.error(f"An error occurred: {e}")
                 finally:
                     self.logger.info("Shutting down Dask client and cluster.")
 
