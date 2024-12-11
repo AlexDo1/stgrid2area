@@ -14,7 +14,7 @@ from .area import Area
 
 
 class LocalDaskProcessor:
-    def __init__(self, areas: list[Area], stgrid: Union[xr.Dataset | xr.DataArray, list[xr.Dataset | xr.DataArray]], variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
+    def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
