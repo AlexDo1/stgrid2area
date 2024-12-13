@@ -179,7 +179,7 @@ class LocalDaskProcessor:
                                 # Pre-clip individually for each area
                                 area_stgrids = {
                                     area.id: stgrid.rio.clip(
-                                        area.geometry.to_crs(stgrid.rio.crs), 
+                                        area.geometry.geometry.to_crs(stgrid.rio.crs), 
                                         all_touched=True
                                     ).persist() 
                                     for area in batch
