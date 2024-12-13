@@ -195,7 +195,8 @@ class LocalDaskProcessor:
                                         self.operations,
                                         self.skip_exist,
                                         n_stgrid,
-                                        total_stgrids
+                                        total_stgrids,
+                                        dask_key_name=f"{area.id}_{n_stgrid}"
                                     ) for area in batch
                                 ]
 
