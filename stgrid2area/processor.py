@@ -13,6 +13,31 @@ import numpy as np
 from .area import Area
 
 
+def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: str, method: str, operations: list[str], skip_exist: bool, n_stgrid: int, total_stgrids: int) -> Union[pd.DataFrame, Exception]:
+    """
+    Standalone function to process (clip and aggregate) a single area.  
+    This cannot be a method of the Processor class because it is used in parallel processing with Dask and
+    `self.process_area` would serialize the entire Processor object, with all its data, meaning that the
+    all stgrids and areas would be copied to each worker, which is very inefficient and consumes a lot of memory. 
+    
+    """
+    filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"
+    filename_aggr = f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv"
+    
+    clipped = area.clip(stgrid, save_result=True, skip_exist=skip_exist, filename=filename_clip)
+    
+    if method in ["exact_extract", "xarray"]:
+        return area.aggregate(clipped, variable, method, operations, 
+                            save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+    elif method == "fallback_xarray":
+        try:
+            return area.aggregate(clipped, variable, "exact_extract", operations, 
+                                save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+        except ValueError:
+            Path(area.output_path, "fallback_xarray").touch()
+            return area.aggregate(clipped, variable, "xarray", operations, 
+                                save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+
 class LocalDaskProcessor:
     def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
         """
@@ -86,6 +111,9 @@ class LocalDaskProcessor:
         filename_aggr : str, optional
             The filename to save the aggregated variable to. If None, a default filename will be used.  
             Important when processing multiple spatiotemporal grids to avoid overwriting files.
+
+        ..deprecated:: 0.2.0
+            Use the `process_area` function instead.
         
         Returns
         -------
@@ -156,11 +184,10 @@ class LocalDaskProcessor:
 
                                 # Process each area in the batch
                                 tasks = [
-                                    delayed(self.clip_and_aggregate)(
-                                        area, stgrid_pre, 
-                                        filename_clip=f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc", 
-                                        filename_aggr=f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv", 
-                                        dask_key_name=f"{area.id}_{n_stgrid}"
+                                    delayed(process_area)(
+                                        area, stgrid_pre,
+                                        self.variable, self.method, self.operations,
+                                        self.skip_exist, n_stgrid, total_stgrids
                                     ) for area in batch
                                 ]
 
