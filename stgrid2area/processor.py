@@ -197,13 +197,26 @@ class LocalDaskProcessor:
                                     area_id = future.key.split('_')[0]  # Extract area ID from the key
                                     try:
                                         result = future.result()
-                                        if isinstance(result, pd.DataFrame):
+                                        # Extract the area ID from the batch
+                                        area_id = None
+                                        for area in batch:
+                                            if str(area.id) in future.key:
+                                                area_id = area.id
+                                                break
+
+                                        if area_id and isinstance(result, pd.DataFrame):
                                             area_success[area_id] += 1
                                             # Only log success when all stgrids for an area are processed
                                             if area_success[area_id] == total_stgrids:
                                                 processed_areas += 1
                                                 self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
                                     except Exception as e:
+                                        # Find the relevant area ID from the batch
+                                        area_id = "unknown"
+                                        for area in batch:
+                                            if str(area.id) in future.key:
+                                                area_id = area.id
+                                                break
                                         self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
 
                                 # Cleanup futures and persisted data
