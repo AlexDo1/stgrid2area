@@ -219,7 +219,7 @@ class LocalDaskProcessor:
                                 client.cancel(futures)
                                 for grid in area_stgrids.values():
                                     client.cancel(grid)
-                                del area_grids, tasks, futures
+                                del area_stgrids, tasks, futures
                                 gc.collect()
 
                             except Exception as e:
