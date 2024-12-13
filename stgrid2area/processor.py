@@ -98,7 +98,10 @@ class LocalDaskProcessor:
         When clipping the grid, the all_touched parameter is set to True, as the variable is aggregated with
         the exact_extract method, which requires all pixels that are partially in the area.
         The clipped grid and the aggregated variable are saved in the output directory of the area.  
-                
+        
+        ..deprecated:: 0.2.0
+            Use the `process_area` function instead.
+        
         Parameters
         ----------
         area : Area
@@ -111,9 +114,6 @@ class LocalDaskProcessor:
         filename_aggr : str, optional
             The filename to save the aggregated variable to. If None, a default filename will be used.  
             Important when processing multiple spatiotemporal grids to avoid overwriting files.
-
-        ..deprecated:: 0.2.0
-            Use the `process_area` function instead.
         
         Returns
         -------
@@ -176,18 +176,26 @@ class LocalDaskProcessor:
 
                         for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
                             try:
-                                # Pre-clip the stgrid to the batch of areas
-                                stgrid_pre = stgrid.rio.clip(
-                                    pd.concat([area.geometry for area in batch]).geometry.to_crs(stgrid.rio.crs), 
-                                    all_touched=True
-                                ).persist()
+                                # Pre-clip individually for each area
+                                area_stgrids = {
+                                    area.id: stgrid.rio.clip(
+                                        area.geometry.to_crs(stgrid.rio.crs), 
+                                        all_touched=True
+                                    ).persist() 
+                                    for area in batch
+                                }
 
-                                # Process each area in the batch
+                                # Create tasks with area-specific pre-clipped grids
                                 tasks = [
                                     delayed(process_area)(
-                                        area, stgrid_pre,
-                                        self.variable, self.method, self.operations,
-                                        self.skip_exist, n_stgrid, total_stgrids
+                                        area,
+                                        area_stgrids[area.id], # Use area-specific grid
+                                        self.variable,
+                                        self.method,
+                                        self.operations,
+                                        self.skip_exist,
+                                        n_stgrid,
+                                        total_stgrids
                                     ) for area in batch
                                 ]
 
@@ -197,32 +205,21 @@ class LocalDaskProcessor:
                                     area_id = future.key.split('_')[0]  # Extract area ID from the key
                                     try:
                                         result = future.result()
-                                        # Extract the area ID from the batch
-                                        area_id = None
-                                        for area in batch:
-                                            if str(area.id) in future.key:
-                                                area_id = area.id
-                                                break
 
-                                        if area_id and isinstance(result, pd.DataFrame):
+                                        if isinstance(result, pd.DataFrame):
                                             area_success[area_id] += 1
                                             # Only log success when all stgrids for an area are processed
                                             if area_success[area_id] == total_stgrids:
                                                 processed_areas += 1
                                                 self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
                                     except Exception as e:
-                                        # Find the relevant area ID from the batch
-                                        area_id = "unknown"
-                                        for area in batch:
-                                            if str(area.id) in future.key:
-                                                area_id = area.id
-                                                break
                                         self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
 
                                 # Cleanup futures and persisted data
                                 client.cancel(futures)
-                                client.cancel(stgrid_pre)
-                                del futures, tasks, stgrid_pre
+                                for grid in area_stgrids.values():
+                                    client.cancel(grid)
+                                del area_grids, tasks, futures
                                 gc.collect()
 
                             except Exception as e:
