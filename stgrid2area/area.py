@@ -103,11 +103,11 @@ class Area():
             
             try:
                 # Save the clipped grid to the output directory
-                clipped.to_netcdf(self.output_path / filename)
+                clipped.to_netcdf(self.output_path / filename, engine="h5netcdf")
             # xarray PermissionError: delete existing file before saving
             except PermissionError:
                 os.remove(self.output_path / filename)
-                clipped.to_netcdf(self.output_path / filename)
+                clipped.to_netcdf(self.output_path / filename, engine="h5netcdf")
         
         return clipped
     
