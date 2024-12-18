@@ -24,19 +24,24 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
     filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"
     filename_aggr = f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv"
     
-    clipped = area.clip(stgrid, save_result=True, skip_exist=skip_exist, filename=filename_clip)
+    try:
+        clipped = area.clip(stgrid, save_result=True, skip_exist=skip_exist, filename=filename_clip)
     
-    if method in ["exact_extract", "xarray"]:
-        return area.aggregate(clipped, variable, method, operations, 
-                            save_result=True, skip_exist=skip_exist, filename=filename_aggr)
-    elif method == "fallback_xarray":
-        try:
-            return area.aggregate(clipped, variable, "exact_extract", operations, 
-                                save_result=True, skip_exist=skip_exist, filename=filename_aggr)
-        except ValueError:
-            Path(area.output_path, "fallback_xarray").touch()
-            return area.aggregate(clipped, variable, "xarray", operations, 
-                                save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+        if method in ["exact_extract", "xarray"]:
+            result = area.aggregate(clipped, variable, method, operations, 
+                                    save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+        elif method == "fallback_xarray":
+            try:
+                result = area.aggregate(clipped, variable, "exact_extract", operations, 
+                                        save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+            except ValueError:
+                Path(area.output_path, "fallback_xarray").touch()
+                result = area.aggregate(clipped, variable, "xarray", operations, 
+                                        save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+        return result
+    finally:
+        clipped.close()
+        stgrid.close()        
 
 class LocalDaskProcessor:
     def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
@@ -91,63 +96,6 @@ class LocalDaskProcessor:
             self.logger = logging.getLogger(__name__)
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
-
-    def clip_and_aggregate(self, area: Area, stgrid: xr.Dataset, filename_clip: str = None, filename_aggr: str = None) -> Union[pd.DataFrame, Exception]:
-        """
-        Process an area by clipping the spatiotemporal grid to the area and aggregating the variable.  
-        When clipping the grid, the all_touched parameter is set to True, as the variable is aggregated with
-        the exact_extract method, which requires all pixels that are partially in the area.
-        The clipped grid and the aggregated variable are saved in the output directory of the area.  
-        
-        ..deprecated:: 0.2.0
-            Use the `process_area` function instead.
-        
-        Parameters
-        ----------
-        area : Area
-            The area to process.
-        stgrid : xr.Dataset
-            The spatiotemporal grid to clip to the area.
-        filename_clip : str, optional
-            The filename to save the clipped grid to. If None, a default filename will be used.  
-            Important when processing multiple spatiotemporal grids to avoid overwriting files.
-        filename_aggr : str, optional
-            The filename to save the aggregated variable to. If None, a default filename will be used.  
-            Important when processing multiple spatiotemporal grids to avoid overwriting files.
-        
-        Returns
-        -------
-        pd.DataFrame
-            The aggregated variable as a DataFrame.
-        
-        """
-        # Parse the filenames, check if ends with .nc or .csv
-        if filename_clip is None:
-            filename_clip = f"{area.id}_clipped.nc"
-        elif not filename_clip.endswith(".nc"):
-            filename_clip = f"{filename_clip}_clipped.nc"
-
-        if filename_aggr is None:
-            filename_aggr = f"{area.id}_aggregated.csv"
-        elif not filename_aggr.endswith(".csv"):
-            filename_aggr = f"{filename_aggr}_aggregated.csv"
-
-        # Clip the spatiotemporal grid to the area
-        clipped = area.clip(stgrid, save_result=True, skip_exist=self.skip_exist, filename=filename_clip)
-
-        # Aggregate the variable
-        if self.method in ["exact_extract", "xarray"]:
-            return area.aggregate(clipped, self.variable, self.method, self.operations, save_result=True, skip_exist=self.skip_exist, filename=filename_aggr)
-        elif self.method == "fallback_xarray":
-            try:
-                return area.aggregate(clipped, self.variable, "exact_extract", self.operations, save_result=True, skip_exist=self.skip_exist, filename=filename_aggr)
-            except ValueError:
-                self.logger.warning(f"Method 'exact_extract' failed for area {area.id}. Falling back to 'xarray' method.")
-                # add a file "fallback_xarray" to the output directory to indicate that the fallback method was used
-                Path(area.output_path, "fallback_xarray").touch()
-                return area.aggregate(clipped, self.variable, "xarray", self.operations, save_result=True, skip_exist=self.skip_exist, filename=filename_aggr)
-        else:
-            raise ValueError("Invalid method. Use 'exact_extract', 'xarray' or 'fallback_xarray'.")
         
     def run(self) -> None:
         """
@@ -209,6 +157,7 @@ class LocalDaskProcessor:
 
                                         if isinstance(result, pd.DataFrame):
                                             area_success[area_id] += 1
+                                            area_stgrids[area_id].close()
                                             # Only log success when all stgrids for an area are processed
                                             if area_success[area_id] == total_stgrids:
                                                 processed_areas += 1
@@ -219,6 +168,8 @@ class LocalDaskProcessor:
                                 # Cleanup futures and persisted data
                                 client.cancel(futures)
                                 for grid in area_stgrids.values():
+                                    if hasattr(grid, 'close'):
+                                        grid.close()
                                     client.cancel(grid)
                                 del area_stgrids, tasks, futures
                                 gc.collect()
