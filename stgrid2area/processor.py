@@ -13,38 +13,71 @@ import numpy as np
 from .area import Area
 
 
-def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: str, method: str, operations: list[str], skip_exist: bool, n_stgrid: int, total_stgrids: int) -> Union[pd.DataFrame, Exception]:
+def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: str, method: str, operations: list[str], skip_exist: bool, 
+                 n_stgrid: int, total_stgrids: int, save_nc: bool = True, save_csv: bool = True) -> pd.DataFrame:
     """
     Standalone function to process (clip and aggregate) a single area.  
     This cannot be a method of the Processor class because it is used in parallel processing with Dask and
     `self.process_area` would serialize the entire Processor object, with all its data, meaning that the
-    all stgrids and areas would be copied to each worker, which is very inefficient and consumes a lot of memory. 
+    all stgrids and areas would be copied to each worker, which is very inefficient and consumes a lot of memory.
+
+    Parameters
+    ----------
+    area : Area
+        The area to process.
+    stgrid : xr.Dataset or xr.DataArray
+        The spatiotemporal grid to clip to the area.
+    variable : str
+        The variable in stgrid to aggregate.
+    method : str
+        The method to use for aggregation.
+    operations : list of str
+        List of aggregation operations to apply.
+    skip_exist : bool
+        If True, skip processing areas that already have clipped grids or aggregated in their output directories.
+    n_stgrid : int
+        The index of the spatiotemporal grid in the list of stgrids.
+    total_stgrids : int
+        The total number of spatiotemporal grids to process.
+    save_nc : bool, optional
+        If True, save the clipped grid to a NetCDF file in the output directory of the area.
+    save_csv : bool, optional
+        If True, save the aggregated variable to a CSV file in the output directory of the area. 
+
+    Returns
+    -------
+    pd.DataFrame
+        The aggregated variable as a pandas DataFrame.
     
     """
     filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"
     filename_aggr = f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv"
     
     try:
-        clipped = area.clip(stgrid, save_result=True, skip_exist=skip_exist, filename=filename_clip)
+        clipped = area.clip(stgrid, save_result=save_nc, skip_exist=skip_exist, filename=filename_clip)
     
         if method in ["exact_extract", "xarray"]:
             result = area.aggregate(clipped, variable, method, operations, 
-                                    save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+                                    save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
         elif method == "fallback_xarray":
             try:
                 result = area.aggregate(clipped, variable, "exact_extract", operations, 
-                                        save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+                                        save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
             except ValueError:
                 Path(area.output_path, "fallback_xarray").touch()
                 result = area.aggregate(clipped, variable, "xarray", operations, 
-                                        save_result=True, skip_exist=skip_exist, filename=filename_aggr)
+                                        save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
         return result
+    except Exception as e:
+        raise e
     finally:
         clipped.close()
         stgrid.close()        
 
 class LocalDaskProcessor:
-    def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, logger: logging.Logger = None):
+    def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
+                 variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, 
+                 save_nc: bool = True, save_csv: bool = True, logger: logging.Logger = None) -> None:
         """
         Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
 
@@ -72,6 +105,10 @@ class LocalDaskProcessor:
         batch_size : int, optional
             Number of areas to process in each batch. Default: process all areas at once.  
             If the number of areas is large, it may be necessary to process them in smaller batches to avoid memory issues.
+        save_nc : bool, optional
+            If True, save the clipped grids to NetCDF files in the output directories of the areas.
+        save_csv : bool, optional
+            If True, save the aggregated variables to CSV files in the output directories of the areas.
         logger : logging.Logger, optional
             Logger to use for logging. If None, a basic logger will be set up.
 
@@ -88,6 +125,8 @@ class LocalDaskProcessor:
         self.operations = operations
         self.n_workers = n_workers or os.cpu_count()
         self.skip_exist = skip_exist
+        self.save_nc = save_nc
+        self.save_csv = save_csv
         self.logger = logger
         self.batch_size = batch_size or len(areas)  # Default: process all areas at once
 
@@ -144,6 +183,8 @@ class LocalDaskProcessor:
                                         self.skip_exist,
                                         n_stgrid,
                                         total_stgrids,
+                                        self.save_nc,
+                                        self.save_csv,
                                         dask_key_name=f"{area.id}_{n_stgrid}"
                                     ) for area in batch
                                 ]
