@@ -278,6 +278,7 @@ class SLURMDaskProcessor:
             Number of threads per worker (default is 1 for CPU-bound tasks).
         cluster_kwargs : dict, optional
             Additional keyword arguments to pass to SLURMCluster.
+
         """
         self.areas = areas
         if isinstance(stgrid, xr.Dataset) or isinstance(stgrid, xr.DataArray):
@@ -297,6 +298,9 @@ class SLURMDaskProcessor:
         self.cluster_kwargs = cluster_kwargs or {}
 
         # Auto-detect SLURM resources from environment variables
+        self.partition = os.environ.get("SLURM_JOB_PARTITION", None)
+        if self.partition is None:
+            raise ValueError("SLURM_JOB_PARTITION environment variable is not set.")
         self.nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
         self.n_workers_per_node = int(os.environ.get("SLURM_CPUS_ON_NODE", 1))
         if "SLURM_MEM_PER_NODE" in os.environ:
@@ -326,6 +330,7 @@ class SLURMDaskProcessor:
     def run(self) -> None:
         """
         Run the parallel processing of areas using Dask on a SLURM cluster.
+
         """
         self.logger.info("Starting processing with SLURMDaskProcessor (SLURM HPC).")
 
