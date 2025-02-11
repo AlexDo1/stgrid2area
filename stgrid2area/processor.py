@@ -3,6 +3,7 @@ from typing import Union
 import gc
 from dask import delayed
 from dask.distributed import Client, LocalCluster, as_completed
+from dask_jobqueue import SLURMCluster
 import pandas as pd
 import xarray as xr
 import rioxarray
@@ -64,6 +65,7 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
                 result = area.aggregate(clipped, variable, "exact_extract", operations, 
                                         save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
             except ValueError:
+                # Indicate fallback was used
                 Path(area.output_path, "fallback_xarray").touch()
                 result = area.aggregate(clipped, variable, "xarray", operations, 
                                         save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
@@ -229,3 +231,200 @@ class LocalDaskProcessor:
                     self.logger.error(f"An error occurred: {e}")
                 finally:
                     self.logger.info("Shutting down Dask client and cluster.")
+
+class SLURMDaskProcessor:
+    def __init__(self,
+                 areas: list[Area],
+                 stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]],
+                 variable: str,
+                 method: str,
+                 operations: list[str],
+                 skip_exist: bool = False,
+                 batch_size: int = None,
+                 save_nc: bool = True,
+                 save_csv: bool = True,
+                 logger: logging.Logger = None,
+                 threads_per_worker: int = 1,
+                 cluster_kwargs: dict = None):
+        """
+        Initialize a SLURMDaskProcessor for parallel processing on a SLURM HPC.
+
+        The SLURM job script is responsible for allocating resources (queue, walltime, nodes, memory, etc.).
+        This processor will automatically read environment variables (when available) to scale to the allocated resources.
+
+        Parameters
+        ----------
+        areas : list of Area
+            List of area objects to process.
+        stgrid : xr.Dataset, xr.DataArray or list of them
+            The spatiotemporal data to process.
+        variable : str
+            The variable in stgrid to aggregate.
+        method : str
+            Aggregation method ("exact_extract", "xarray", or "fallback_xarray").
+        operations : list of str
+            List of aggregation operations to apply.
+        skip_exist : bool, optional
+            If True, skip processing areas that already have outputs.
+        batch_size : int, optional
+            Number of areas to process in each batch.
+        save_nc : bool, optional
+            If True, save clipped grids to NetCDF.
+        save_csv : bool, optional
+            If True, save aggregated variables to CSV.
+        logger : logging.Logger, optional
+            Logger for logging.
+        threads_per_worker : int, optional
+            Number of threads per worker (default is 1 for CPU-bound tasks).
+        cluster_kwargs : dict, optional
+            Additional keyword arguments to pass to SLURMCluster.
+        """
+        self.areas = areas
+        if isinstance(stgrid, xr.Dataset) or isinstance(stgrid, xr.DataArray):
+            self.stgrid = [stgrid]
+        elif isinstance(stgrid, list):
+            self.stgrid = stgrid
+        else:
+            raise ValueError("stgrid must be an xr.Dataset, xr.DataArray or a list of them.")
+        self.variable = variable
+        self.method = method
+        self.operations = operations
+        self.skip_exist = skip_exist
+        self.save_nc = save_nc
+        self.save_csv = save_csv
+        self.batch_size = batch_size or len(areas)
+        self.threads_per_worker = threads_per_worker
+        self.cluster_kwargs = cluster_kwargs or {}
+
+        # Auto-detect SLURM resources from environment variables
+        self.nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
+        self.n_workers_per_node = int(os.environ.get("SLURM_CPUS_ON_NODE", 1))
+        if "SLURM_MEM_PER_NODE" in os.environ:
+            self.mem_per_node = f"{os.environ['SLURM_MEM_PER_NODE']}"
+            # Assume SLURM_MEM_PER_NODE is given in a format accepted by dask-jobqueue (e.g., "180GB")
+        elif "SLURM_MEM_PER_CPU" in os.environ:
+            mem_per_cpu = int(os.environ["SLURM_MEM_PER_CPU"])
+            total_mem_mb = self.n_workers_per_node * mem_per_cpu
+            self.mem_per_node = f"{total_mem_mb}MB"
+        else:
+            self.mem_per_node = "180GB"  # Fallback default
+
+        self.logger = logger
+        if not self.logger:
+            self.logger = logging.getLogger(__name__)
+            self.logger.setLevel(logging.INFO)
+            self.logger.addHandler(logging.StreamHandler())
+
+    def _log_memory_usage(self, client: Client, message: str = "Memory usage"):
+        try:
+            worker_info = client.scheduler_info()["workers"]
+            total_memory = sum(worker["memory"] for worker in worker_info.values())
+            self.logger.info(f"{message}: {total_memory / (1024**2):.2f} MB")
+        except Exception as e:
+            self.logger.error(f"Could not log memory usage: {e}")
+
+    def run(self) -> None:
+        """
+        Run the parallel processing of areas using Dask on a SLURM cluster.
+        """
+        self.logger.info("Starting processing with SLURMDaskProcessor (SLURM HPC).")
+
+        # Create a SLURM cluster using resources allocated by SLURM.
+        # We do not set queue, walltime, or similar here because they are set via the job script (or via dask-jobqueue config).
+        cluster = SLURMCluster(
+            cores=self.n_workers_per_node,
+            memory=self.mem_per_node,
+            # Additional options can be provided via the cluster_kwargs parameter.
+            **self.cluster_kwargs
+        )
+        # Scale to use the number of jobs equal to the allocated nodes.
+        cluster.scale(jobs=self.nodes)
+
+        client = Client(cluster)
+        try:
+            self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
+
+            # Split areas into batches
+            area_batches = np.array_split(self.areas, max(1, len(self.areas) // self.batch_size))
+            self.logger.info(f"Processing {len(self.areas)} areas in {len(area_batches)} batches.")
+
+            total_areas = len(self.areas)
+            area_success = {area.id: 0 for area in self.areas}
+            total_stgrids = len(self.stgrid)
+            processed_areas = 0
+
+            for i, batch in enumerate(area_batches, start=1):
+                self.logger.info(f"Processing batch {i}/{len(area_batches)} with {len(batch)} areas.")
+
+                for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
+                    try:
+                        # Pre-clip each area individually using its own geometry
+                        area_stgrids = {
+                            area.id: stgrid.rio.clip(
+                                area.geometry.geometry.to_crs(stgrid.rio.crs),
+                                all_touched=True
+                            ).persist()
+                            for area in batch
+                        }
+
+                        tasks = [
+                            delayed(process_area)(
+                                area,
+                                area_stgrids[area.id],
+                                self.variable,
+                                self.method,
+                                self.operations,
+                                self.skip_exist,
+                                n_stgrid,
+                                total_stgrids,
+                                self.save_nc,
+                                self.save_csv,
+                                dask_key_name=f"{area.id}_{n_stgrid}"
+                            ) for area in batch
+                        ]
+
+                        futures = client.compute(tasks)
+
+                        for future in as_completed(futures):
+                            area_id = future.key.split('_')[0]
+                            try:
+                                result = future.result()
+                                if isinstance(result, pd.DataFrame):
+                                    area_success[area_id] += 1
+                                    try:
+                                        area_stgrids[area_id].close()
+                                    except Exception:
+                                        pass
+                                    if area_success[area_id] == total_stgrids:
+                                        processed_areas += 1
+                                        self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
+                            except Exception as e:
+                                self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
+
+                        client.cancel(futures)
+                        for grid in area_stgrids.values():
+                            if hasattr(grid, 'close'):
+                                try:
+                                    grid.close()
+                                except Exception:
+                                    pass
+                            client.cancel(grid)
+                        del area_stgrids, tasks, futures
+                        gc.collect()
+
+                    except Exception as e:
+                        self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
+
+                self._log_memory_usage(client, message=f"Memory usage before restart for batch {i}")
+                client.restart()
+                self.logger.info(f"Finished batch {i}/{len(area_batches)}. Restarted Dask client and cluster for the next batch.\n")
+                self._log_memory_usage(client, message=f"Memory usage after restart for batch {i}")
+
+            successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
+            self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
+        except Exception as e:
+            self.logger.error(f"An error occurred: {e}")
+        finally:
+            self.logger.info("Shutting down Dask client and cluster.")
+            client.close()
+            cluster.close()
