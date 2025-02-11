@@ -297,21 +297,26 @@ class SLURMDaskProcessor:
         self.threads_per_worker = threads_per_worker
         self.cluster_kwargs = cluster_kwargs or {}
 
-        # Auto-detect SLURM resources from environment variables
-        self.partition = os.environ.get("SLURM_JOB_PARTITION", None)
+        # Auto-detect SLURM resources
+        self.partition = os.environ.get("SLURM_JOB_PARTITION")
         if self.partition is None:
-            raise ValueError("SLURM_JOB_PARTITION environment variable is not set.")
+            raise RuntimeError("SLURM_JOB_PARTITION is not set in the environment!")
+        
         self.nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
         self.n_workers_per_node = int(os.environ.get("SLURM_CPUS_ON_NODE", 1))
+        
+        # Memory detection: try to get memory per node or compute it from memory per CPU.
         if "SLURM_MEM_PER_NODE" in os.environ:
-            self.mem_per_node = f"{os.environ['SLURM_MEM_PER_NODE']}"
-            # Assume SLURM_MEM_PER_NODE is given in a format accepted by dask-jobqueue (e.g., "180GB")
+            self.mem_per_node = os.environ["SLURM_MEM_PER_NODE"]
         elif "SLURM_MEM_PER_CPU" in os.environ:
-            mem_per_cpu = int(os.environ["SLURM_MEM_PER_CPU"])
-            total_mem_mb = self.n_workers_per_node * mem_per_cpu
-            self.mem_per_node = f"{total_mem_mb}MB"
+            try:
+                mem_per_cpu = int(os.environ["SLURM_MEM_PER_CPU"])
+                total_mem_mb = self.n_workers_per_node * mem_per_cpu
+                self.mem_per_node = f"{total_mem_mb}MB"
+            except Exception:
+                self.mem_per_node = "180GB"
         else:
-            self.mem_per_node = "180GB"  # Fallback default
+            self.mem_per_node = "180GB"
 
         self.logger = logger
         if not self.logger:
@@ -337,6 +342,7 @@ class SLURMDaskProcessor:
         # Create a SLURM cluster using resources allocated by SLURM.
         # We do not set queue, walltime, or similar here because they are set via the job script (or via dask-jobqueue config).
         cluster = SLURMCluster(
+            queue=self.partition,
             cores=self.n_workers_per_node,
             memory=self.mem_per_node,
             # Additional options can be provided via the cluster_kwargs parameter.
