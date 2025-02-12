@@ -301,7 +301,7 @@ class SLURMDaskProcessor:
         self.partition = os.environ.get("SLURM_JOB_PARTITION")
         if self.partition is None:
             raise RuntimeError("SLURM_JOB_PARTITION is not set in the environment!")
-        
+            
         self.nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
         self.n_workers_per_node = int(os.environ.get("SLURM_CPUS_ON_NODE", 1))
         
@@ -343,13 +343,22 @@ class SLURMDaskProcessor:
         # We do not set queue, walltime, or similar here because they are set via the job script (or via dask-jobqueue config).
         cluster = SLURMCluster(
             queue=self.partition,
-            cores=self.n_workers_per_node,
-            memory=self.mem_per_node,
+            cores=self.n_workers_per_node,  # Should match --ntasks-per-node (64)
+            memory=self.mem_per_node,  # Should match --mem-per-cpu * ntasks-per-node
+            processes=self.n_workers_per_node,  # Should match ntasks-per-node
             # Additional options can be provided via the cluster_kwargs parameter.
             **self.cluster_kwargs
         )
-        # Scale to use the number of jobs equal to the allocated nodes.
-        cluster.scale(jobs=self.nodes)
+        # If not running within an allocation, scale the cluster.
+        if os.environ.get("SLURM_JOB_ID") is None:
+            # Scale to the total number of jobs (each job corresponds to one worker on one node)
+            desired_jobs = self.nodes * self.n_workers_per_node
+            self.logger.info(f"Not running in an allocation; scaling cluster with jobs={desired_jobs}")
+            cluster.scale(jobs=desired_jobs)
+        else:
+            self.logger.info(f"Detected SLURM allocation (SLURM_JOB_ID={os.environ.get('SLURM_JOB_ID')}). "
+                             "Using allocated resources without submitting additional jobs.")
+
 
         client = Client(cluster)
         try:
