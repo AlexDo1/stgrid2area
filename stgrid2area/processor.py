@@ -450,7 +450,7 @@ class SLURMDaskProcessor:
             cluster.close()
 
 
-class DaskMPIProcessor:
+class MPIDaskProcessor:
     def __init__(self, 
                  areas: list[Area], 
                  stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
@@ -464,7 +464,7 @@ class DaskMPIProcessor:
                  save_csv: bool = True, 
                  logger: logging.Logger = None) -> None:
         """
-        Initialize a DaskMPIProcessor for parallel processing using dask-mpi.
+        Initialize a MPIDaskProcessor for parallel processing using dask-mpi.
         
         This processor is intended for static workloads running on a multi-node HPC 
         with resources allocated via SLURM and launched using mpirun/srun.
@@ -529,7 +529,7 @@ class DaskMPIProcessor:
         This assumes that your job was launched via an MPI launcher (e.g., mpirun or srun)
         and that dask_mpi.initialize() will start the scheduler and workers across all allocated nodes.
         """
-        self.logger.info("Starting processing with DaskMPIProcessor (using dask-mpi).")
+        self.logger.info("Starting processing with MPIDaskProcessor (using dask-mpi).")
         # Initialize the MPI-based cluster.
         from dask_mpi import initialize
         initialize()  # This sets up the Dask scheduler and workers using the MPI environment.
