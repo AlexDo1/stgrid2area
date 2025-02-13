@@ -448,3 +448,171 @@ class SLURMDaskProcessor:
             self.logger.info("Shutting down Dask client and cluster.")
             client.close()
             cluster.close()
+
+
+class DaskMPIProcessor:
+    def __init__(self, 
+                 areas: list[Area], 
+                 stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
+                 variable: str, 
+                 method: str, 
+                 operations: list[str], 
+                 n_workers: int = None, 
+                 skip_exist: bool = False, 
+                 batch_size: int = None, 
+                 save_nc: bool = True, 
+                 save_csv: bool = True, 
+                 logger: logging.Logger = None) -> None:
+        """
+        Initialize a DaskMPIProcessor for parallel processing using dask-mpi.
+        
+        This processor is intended for static workloads running on a multi-node HPC 
+        with resources allocated via SLURM and launched using mpirun/srun.
+        
+        Parameters
+        ----------
+        areas : list of Area
+            List of area objects to process.
+        stgrid : xr.Dataset or xr.DataArray
+            The spatiotemporal data to process.  
+            If stgrid is a list of xr.Dataset or xr.DataArray, the processor will process each one in turn. Splitting the data into multiple
+            xr.Dataset or xr.DataArray objects can be useful when the spatiotemporal data is too large to fit into memory.
+        variable : str
+            The variable in stgrid to aggregate.
+        method : str, optional
+            The method to use for aggregation.  
+            Can be "exact_extract", "xarray" or "fallback_xarray".  
+            "fallback_xarray" will first try to use the exact_extract method, and if this raises a ValueError, it will fall back to 
+            the xarray method.
+        operations : list of str
+            List of aggregation operations to apply.
+        skip_exist : bool, optional
+            If True, skip processing areas that already have clipped grids or aggregated in their output directories.
+        batch_size : int, optional
+            Number of areas to process in each batch. Default: process all areas at once.  
+            If the number of areas is large, it may be necessary to process them in smaller batches to avoid memory issues.
+        save_nc : bool, optional
+            If True, save the clipped grids to NetCDF files in the output directories of the areas.
+        save_csv : bool, optional
+            If True, save the aggregated variables to CSV files in the output directories of the areas.
+        logger : logging.Logger, optional
+            Logger to use for logging. If None, a basic logger will be set up.
+        """
+        self.areas = areas
+        if isinstance(stgrid, xr.Dataset) or isinstance(stgrid, xr.DataArray):
+            self.stgrid = [stgrid]
+        elif isinstance(stgrid, list):
+            self.stgrid = stgrid
+        else:
+            raise ValueError("stgrid must be an xr.Dataset, xr.DataArray or a list of them.")
+            
+        self.variable = variable
+        self.method = method
+        self.operations = operations
+        # n_workers is not used here because dask-mpi will launch as many processes as allocated.
+        self.skip_exist = skip_exist
+        self.save_nc = save_nc
+        self.save_csv = save_csv
+        self.batch_size = batch_size or len(areas)
+        self.logger = logger
+
+        # Set up basic logging if no handler is configured
+        if not self.logger:
+            self.logger = logging.getLogger(__name__)
+            self.logger.setLevel(logging.INFO)
+            self.logger.addHandler(logging.StreamHandler())
+
+    def run(self) -> None:
+        """
+        Run the parallel processing of areas using a Dask cluster initialized with dask-mpi.
+        
+        This assumes that your job was launched via an MPI launcher (e.g., mpirun or srun)
+        and that dask_mpi.initialize() will start the scheduler and workers across all allocated nodes.
+        """
+        self.logger.info("Starting processing with DaskMPIProcessor (using dask-mpi).")
+        # Initialize the MPI-based cluster.
+        from dask_mpi import initialize
+        initialize()  # This sets up the Dask scheduler and workers using the MPI environment.
+        
+        # Create a client; by default, it connects to the scheduler started by dask_mpi.
+        client = Client()
+        self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
+        
+        # Split areas into batches
+        area_batches = np.array_split(self.areas, max(1, len(self.areas) // self.batch_size))
+        self.logger.info(f"Processing {len(self.areas)} areas in {len(area_batches)} batches.")
+
+        total_areas = len(self.areas)
+        area_success = {area.id: 0 for area in self.areas}  # Track success count per area
+        total_stgrids = len(self.stgrid)
+        processed_areas = 0
+
+        for i, batch in enumerate(area_batches, start=1):
+            self.logger.info(f"Processing batch {i}/{len(area_batches)} with {len(batch)} areas.")
+
+            for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
+                try:
+                    # Pre-clip individually for each area.
+                    area_stgrids = {
+                        area.id: stgrid.rio.clip(
+                            area.geometry.geometry.to_crs(stgrid.rio.crs),
+                            all_touched=True
+                        ).persist()
+                        for area in batch
+                    }
+
+                    # Create tasks using area-specific pre-clipped grids.
+                    tasks = [
+                        delayed(process_area)(
+                            area,
+                            area_stgrids[area.id],
+                            self.variable,
+                            self.method,
+                            self.operations,
+                            self.skip_exist,
+                            n_stgrid,
+                            total_stgrids,
+                            self.save_nc,
+                            self.save_csv,
+                            dask_key_name=f"{area.id}_{n_stgrid}"
+                        ) for area in batch
+                    ]
+
+                    futures = client.compute(tasks)
+
+                    for future in as_completed(futures):
+                        area_id = future.key.split('_')[0]
+                        try:
+                            result = future.result()
+                            if isinstance(result, pd.DataFrame):
+                                area_success[area_id] += 1
+                                try:
+                                    area_stgrids[area_id].close()
+                                except Exception:
+                                    pass
+                                if area_success[area_id] == total_stgrids:
+                                    processed_areas += 1
+                                    self.logger.info(f"[{processed_areas}/{total_areas}]: {area_id} --- Processing completed.")
+                        except Exception as e:
+                            self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
+
+                    client.cancel(futures)
+                    for grid in area_stgrids.values():
+                        if hasattr(grid, 'close'):
+                            try:
+                                grid.close()
+                            except Exception:
+                                pass
+                        client.cancel(grid)
+                    del area_stgrids, tasks, futures
+                    gc.collect()
+
+                except Exception as e:
+                    self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
+
+            # For dask-mpi, it might be simpler to run all batches in one go and not restart the client between batches.
+            self.logger.info(f"Finished batch {i}/{len(area_batches)}.")
+
+        successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
+        self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
+        client.close()
