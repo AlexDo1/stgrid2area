@@ -239,6 +239,11 @@ class SLURMDaskProcessor:
                  variable: str,
                  method: str,
                  operations: list[str],
+                 desired_jobs: int,      # Total number of worker jobs to launch
+                 queue: str,             # SLURM queue name (e.g., "multiple_il")
+                 cores: int,             # Cores per worker job (should match --ntasks-per-node)
+                 memory: str,            # Total memory per worker job (e.g., "124800MB")
+                 walltime: str,          # Walltime for each worker job (e.g., "01:00:00")
                  skip_exist: bool = False,
                  batch_size: int = None,
                  save_nc: bool = True,
@@ -249,9 +254,13 @@ class SLURMDaskProcessor:
         """
         Initialize a SLURMDaskProcessor for parallel processing on a SLURM HPC.
 
-        The SLURM job script is responsible for allocating resources (queue, walltime, nodes, memory, etc.).
-        This processor will automatically read environment variables (when available) to scale to the allocated resources.
-
+        Explicitly provide the configuration for the SLURMCluster, e.g.:
+            desired_jobs = 8       # Use 8 nodes (worker jobs)
+            queue = "multiple"     # SLURM queue name
+            cores = 64             # 64 tasks per node
+            memory = "124800MB"    # 64 * 1950MB
+            walltime = "01:00:00"
+        
         Parameters
         ----------
         areas : list of Area
@@ -264,6 +273,16 @@ class SLURMDaskProcessor:
             Aggregation method ("exact_extract", "xarray", or "fallback_xarray").
         operations : list of str
             List of aggregation operations to apply.
+        desired_jobs : int
+            The total number of worker jobs (nodes or job units) to submit.
+        queue : str
+            The SLURM queue name (e.g., "multiple_il").
+        cores : int
+            Number of cores per worker job (should match your HPC’s ntasks-per-node).
+        memory : str
+            Total memory per worker job (e.g., "124800MB").
+        walltime : str
+            Walltime for each worker job (e.g., "01:00:00").
         skip_exist : bool, optional
             If True, skip processing areas that already have outputs.
         batch_size : int, optional
@@ -290,6 +309,11 @@ class SLURMDaskProcessor:
         self.variable = variable
         self.method = method
         self.operations = operations
+        self.desired_jobs = desired_jobs
+        self.queue = queue
+        self.cores = cores
+        self.memory = memory
+        self.walltime = walltime
         self.skip_exist = skip_exist
         self.save_nc = save_nc
         self.save_csv = save_csv
@@ -297,27 +321,7 @@ class SLURMDaskProcessor:
         self.threads_per_worker = threads_per_worker
         self.cluster_kwargs = cluster_kwargs or {}
 
-        # Auto-detect SLURM resources
-        self.partition = os.environ.get("SLURM_JOB_PARTITION")
-        if self.partition is None:
-            raise RuntimeError("SLURM_JOB_PARTITION is not set in the environment!")
-            
-        self.nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
-        self.n_workers_per_node = int(os.environ.get("SLURM_CPUS_ON_NODE", 1))
-        
-        # Memory detection: try to get memory per node or compute it from memory per CPU.
-        if "SLURM_MEM_PER_NODE" in os.environ:
-            self.mem_per_node = os.environ["SLURM_MEM_PER_NODE"]
-        elif "SLURM_MEM_PER_CPU" in os.environ:
-            try:
-                mem_per_cpu = int(os.environ["SLURM_MEM_PER_CPU"])
-                total_mem_mb = self.n_workers_per_node * mem_per_cpu
-                self.mem_per_node = f"{total_mem_mb}MB"
-            except Exception:
-                self.mem_per_node = "180GB"
-        else:
-            self.mem_per_node = "180GB"
-
+        # Set up logging.
         self.logger = logger
         if not self.logger:
             self.logger = logging.getLogger(__name__)
@@ -334,37 +338,30 @@ class SLURMDaskProcessor:
 
     def run(self) -> None:
         """
-        Run the parallel processing of areas using Dask on a SLURM cluster.
-
+        Run the parallel processing of areas using a Dask cluster created with SLURMCluster.
+        
+        Worker jobs are submitted based on the explicit cluster configuration provided.
         """
         self.logger.info("Starting processing with SLURMDaskProcessor (SLURM HPC).")
 
-        # Create a SLURM cluster using resources allocated by SLURM.
-        # We do not set queue, walltime, or similar here because they are set via the job script (or via dask-jobqueue config).
+        # Create the SLURMCluster using the explicit configuration.
         cluster = SLURMCluster(
-            queue=self.partition,
-            cores=self.n_workers_per_node,  # Should match --ntasks-per-node (64)
-            memory=self.mem_per_node,  # Should match --mem-per-cpu * ntasks-per-node
-            processes=self.n_workers_per_node,  # Should match ntasks-per-node
-            # Additional options can be provided via the cluster_kwargs parameter.
+            queue=self.queue,
+            cores=self.cores,
+            memory=self.memory,
+            walltime=self.walltime,
+            processes=self.cores,  # Typically one process per core (with threads_per_worker=1)
+            threads_per_worker=self.threads_per_worker,
             **self.cluster_kwargs
         )
-        # If not running within an allocation, scale the cluster.
-        if os.environ.get("SLURM_JOB_ID") is None:
-            # Scale to the total number of jobs (each job corresponds to one worker on one node)
-            desired_jobs = self.nodes * self.n_workers_per_node
-            self.logger.info(f"Not running in an allocation; scaling cluster with jobs={desired_jobs}")
-            cluster.scale(jobs=desired_jobs)
-        else:
-            self.logger.info(f"Detected SLURM allocation (SLURM_JOB_ID={os.environ.get('SLURM_JOB_ID')}). "
-                             "Using allocated resources without submitting additional jobs.")
-
+        self.logger.info(f"Scaling cluster to {self.desired_jobs} jobs.")
+        cluster.scale(jobs=self.desired_jobs)
 
         client = Client(cluster)
         try:
             self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
 
-            # Split areas into batches
+            # Split areas into batches.
             area_batches = np.array_split(self.areas, max(1, len(self.areas) // self.batch_size))
             self.logger.info(f"Processing {len(self.areas)} areas in {len(area_batches)} batches.")
 
@@ -378,7 +375,7 @@ class SLURMDaskProcessor:
 
                 for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
                     try:
-                        # Pre-clip each area individually using its own geometry
+                        # Pre-clip each area individually using its own geometry.
                         area_stgrids = {
                             area.id: stgrid.rio.clip(
                                 area.geometry.geometry.to_crs(stgrid.rio.crs),
@@ -404,7 +401,6 @@ class SLURMDaskProcessor:
                         ]
 
                         futures = client.compute(tasks)
-
                         for future in as_completed(futures):
                             area_id = future.key.split('_')[0]
                             try:
@@ -431,7 +427,6 @@ class SLURMDaskProcessor:
                             client.cancel(grid)
                         del area_stgrids, tasks, futures
                         gc.collect()
-
                     except Exception as e:
                         self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
 
@@ -448,7 +443,6 @@ class SLURMDaskProcessor:
             self.logger.info("Shutting down Dask client and cluster.")
             client.close()
             cluster.close()
-
 
 class MPIDaskProcessor:
     def __init__(self, 
@@ -530,10 +524,7 @@ class MPIDaskProcessor:
         and that dask_mpi.initialize() will start the scheduler and workers across all allocated nodes.
         """
         self.logger.info("Starting processing with MPIDaskProcessor (using dask-mpi).")
-        # Initialize the MPI-based cluster.
-        from dask_mpi import initialize
-        initialize()  # This sets up the Dask scheduler and workers using the MPI environment.
-        
+
         # Create a client; by default, it connects to the scheduler started by dask_mpi.
         client = Client()
         self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
