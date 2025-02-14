@@ -351,7 +351,6 @@ class SLURMDaskProcessor:
             memory=self.memory,
             walltime=self.walltime,
             processes=self.cores,  # Typically one process per core (with threads_per_worker=1)
-            threads_per_worker=self.threads_per_worker,
             **self.cluster_kwargs
         )
         self.logger.info(f"Scaling cluster to {self.desired_jobs} jobs.")
