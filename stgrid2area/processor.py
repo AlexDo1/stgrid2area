@@ -449,8 +449,7 @@ class MPIDaskProcessor:
                  stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
                  variable: str, 
                  method: str, 
-                 operations: list[str], 
-                 n_workers: int = None, 
+                 operations: list[str],
                  skip_exist: bool = False, 
                  batch_size: int = None, 
                  save_nc: bool = True, 
@@ -515,17 +514,27 @@ class MPIDaskProcessor:
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
 
-    def run(self) -> None:
+    def run(self, client: Client = None) -> None:
         """
         Run the parallel processing of areas using a Dask cluster initialized with dask-mpi.
         
         This assumes that your job was launched via an MPI launcher (e.g., mpirun or srun)
         and that dask_mpi.initialize() will start the scheduler and workers across all allocated nodes.
+
+        Parameters
+        ----------
+        client : dask.distributed.Client, optional
+            A Dask client to use for processing. When using dask-mpi, the client should be created with 
+            `dask_mpi.initialize()`.  
+            If None, a new client will be created.
+
         """
         self.logger.info("Starting processing with MPIDaskProcessor (using dask-mpi).")
 
-        # Create a client; by default, it connects to the scheduler started by dask_mpi.
-        client = Client()
+        # Use the provided client or create a new one
+        if client is None:
+            client = Client()
+
         self.logger.info(f"Dask dashboard address: {client.dashboard_link}")
         
         # Split areas into batches
