@@ -3,7 +3,7 @@ from .area import Area
 import geopandas as gpd
 
 
-def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: str, sort_by_proximity: bool = False) -> list[Area]:
+def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: str, sort_by_proximity: bool = False, sort_by_area: bool = True) -> list[Area]:
     """
     Convert a GeoDataFrame of areas to a list of Area objects to be used as input for the ParallelProcessor.
 
@@ -22,6 +22,12 @@ def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: s
         This is especially useful when using the ParallelProcessor with batches of areas, as this makes
         sure that batched areas are close to each other, which is more efficient, as a smaller portion of the 
         stgrid will be loaded into memory.
+    sort_by_area : bool, optional
+        Whether to sort the areas by area size. 
+        Default is True.
+        This is especially useful when using the ParallelProcessor with batches of areas, as this makes
+        sure that batched areas are of similar size, which is more efficient, as a similar amount of work 
+        will be done for each area in the each batch.
 
     Returns
     -------
@@ -32,6 +38,13 @@ def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: s
     # Sort the areas by proximity
     if sort_by_proximity:
         areas = areas.sort_values(by="geometry")
+
+    if sort_by_area:
+        # Sort areas by area
+        areas["area"] = areas.to_crs("EPSG:25832").geometry.area / 1e6
+        areas = areas.sort_values("area")
+        # drop the area column
+        areas = areas.drop(columns=["area"])
 
     areas_list = []
 
