@@ -76,6 +76,48 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
         clipped.close()
         stgrid.close()        
 
+
+def check_area_needs_processing(area: Area, n_stgrid: int, total_stgrids: int, 
+                                skip_exist: bool, save_nc: bool, save_csv: bool) -> bool:
+    """
+    Helper function to check if an area needs processing based on existing files.
+    This function checks if the clipped and aggregated files already exist in the output directory of the area.
+    This is only used when skip_exist=True.
+    
+    Parameters
+    ----------
+    area : Area
+        The area to check.
+    n_stgrid : int
+        The index of the spatiotemporal grid in the list of stgrids.
+    total_stgrids : int
+        The total number of spatiotemporal grids to process.
+    skip_exist : bool
+        If True, skip processing areas that already have clipped grids or aggregated in their output directories.
+    save_nc : bool
+        If True, save the clipped grid to a NetCDF file in the output directory of the area.
+    save_csv : bool
+        If True, save the aggregated variable to a CSV file in the output directory of the area.
+    
+    Returns
+    -------
+    bool
+        True if the area needs processing, False otherwise. 
+    
+    """        
+    filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"
+    filename_aggr = f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv"
+    
+    clip_path = Path(area.output_path) / filename_clip
+    aggr_path = Path(area.output_path) / filename_aggr
+    
+    # If save_csv=False, we only need the clipped file
+    if save_nc and not save_csv:
+        return not clip_path.exists()
+        
+    # If save_nc=False or both are True, we need the aggregated file
+    return not aggr_path.exists()
+
 class LocalDaskProcessor:
     def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
                  variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, 
@@ -164,6 +206,28 @@ class LocalDaskProcessor:
                         self.logger.info(f"Processing batch {i}/{len(area_batches)} with {len(batch)} areas.")
 
                         for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
+                            # First check which areas need processing
+                            if self.skip_exist:
+                                areas_to_process = []
+                                for area in batch:
+                                    if check_area_needs_processing(area, n_stgrid, total_stgrids, 
+                                                                   self.skip_exist, self.save_nc, self.save_csv):
+                                        areas_to_process.append(area)
+                                    else:
+                                        area_success[area.id] += 1
+                                        if area_success[area.id] == total_stgrids:
+                                            processed_areas += 1
+                                            self.logger.info(f"[{processed_areas}/{total_areas}]: {area.id} --- Already processed.")
+
+                                if not areas_to_process:
+                                    self.logger.info(f"Skipping batch {i}, stgrid {n_stgrid} - all areas already processed.")
+                                    continue
+                            else:
+                                # No skipping, process all areas in the batch
+                                areas_to_process = batch
+
+                            self.logger.info(f"Processing {len(areas_to_process)} areas in batch {i}.")
+
                             try:
                                 # Pre-clip individually for each area
                                 area_stgrids = {
@@ -171,7 +235,7 @@ class LocalDaskProcessor:
                                         area.geometry.geometry.to_crs(stgrid.rio.crs), 
                                         all_touched=True
                                     ).persist() 
-                                    for area in batch
+                                    for area in areas_to_process
                                 }
 
                                 # Create tasks with area-specific pre-clipped grids
@@ -188,7 +252,7 @@ class LocalDaskProcessor:
                                         self.save_nc,
                                         self.save_csv,
                                         dask_key_name=f"{area.id}_{n_stgrid}"
-                                    ) for area in batch
+                                    ) for area in areas_to_process
                                 ]
 
                                 futures = client.compute(tasks)
@@ -374,13 +438,33 @@ class SLURMDaskProcessor:
 
                 for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
                     try:
+                        # First check which areas need processing
+                        if self.skip_exist:
+                            areas_to_process = []
+                            for area in batch:
+                                if check_area_needs_processing(area, n_stgrid, total_stgrids, 
+                                                            self.skip_exist, self.save_nc, self.save_csv):
+                                    areas_to_process.append(area)
+                                else:
+                                    area_success[area.id] += 1
+                                    if area_success[area.id] == total_stgrids:
+                                        processed_areas += 1
+                                        self.logger.info(f"[{processed_areas}/{total_areas}]: {area.id} --- Already processed.")
+
+                            if not areas_to_process:
+                                self.logger.info(f"Skipping batch {i}, stgrid {n_stgrid} - all areas already processed.")
+                                continue
+                        else:
+                            # No skipping, process all areas in the batch
+                            areas_to_process = batch
+
                         # Pre-clip each area individually using its own geometry.
                         area_stgrids = {
                             area.id: stgrid.rio.clip(
                                 area.geometry.geometry.to_crs(stgrid.rio.crs),
                                 all_touched=True
                             ).persist()
-                            for area in batch
+                            for area in areas_to_process
                         }
 
                         tasks = [
@@ -396,7 +480,7 @@ class SLURMDaskProcessor:
                                 self.save_nc,
                                 self.save_csv,
                                 dask_key_name=f"{area.id}_{n_stgrid}"
-                            ) for area in batch
+                            ) for area in areas_to_process
                         ]
 
                         futures = client.compute(tasks)
@@ -551,13 +635,33 @@ class MPIDaskProcessor:
 
             for n_stgrid, stgrid in enumerate(self.stgrid, start=1):
                 try:
+                    # First check which areas need processing
+                    if self.skip_exist:
+                        areas_to_process = []
+                        for area in batch:
+                            if check_area_needs_processing(area, n_stgrid, total_stgrids, 
+                                                            self.skip_exist, self.save_nc, self.save_csv):
+                                areas_to_process.append(area)
+                            else:
+                                area_success[area.id] += 1
+                                if area_success[area.id] == total_stgrids:
+                                    processed_areas += 1
+                                    self.logger.info(f"[{processed_areas}/{total_areas}]: {area.id} --- Already processed.")
+
+                        if not areas_to_process:
+                            self.logger.info(f"Skipping batch {i}, stgrid {n_stgrid} - all areas already processed.")
+                            continue
+                    else:
+                        # No skipping, process all areas in the batch
+                        areas_to_process = batch
+
                     # Pre-clip individually for each area.
                     area_stgrids = {
                         area.id: stgrid.rio.clip(
                             area.geometry.geometry.to_crs(stgrid.rio.crs),
                             all_touched=True
                         ).persist()
-                        for area in batch
+                        for area in areas_to_process
                     }
 
                     # Create tasks using area-specific pre-clipped grids.
@@ -574,7 +678,7 @@ class MPIDaskProcessor:
                             self.save_nc,
                             self.save_csv,
                             dask_key_name=f"{area.id}_{n_stgrid}"
-                        ) for area in batch
+                        ) for area in areas_to_process
                     ]
 
                     futures = client.compute(tasks)
