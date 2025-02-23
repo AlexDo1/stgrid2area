@@ -77,8 +77,7 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
         stgrid.close()        
 
 
-def check_area_needs_processing(area: Area, n_stgrid: int, total_stgrids: int, 
-                                skip_exist: bool, save_nc: bool, save_csv: bool) -> bool:
+def check_area_needs_processing(area: Area, n_stgrid: int, total_stgrids: int, save_nc: bool, save_csv: bool) -> bool:
     """
     Helper function to check if an area needs processing based on existing files.
     This function checks if the clipped and aggregated files already exist in the output directory of the area.
@@ -92,8 +91,6 @@ def check_area_needs_processing(area: Area, n_stgrid: int, total_stgrids: int,
         The index of the spatiotemporal grid in the list of stgrids.
     total_stgrids : int
         The total number of spatiotemporal grids to process.
-    skip_exist : bool
-        If True, skip processing areas that already have clipped grids or aggregated in their output directories.
     save_nc : bool
         If True, save the clipped grid to a NetCDF file in the output directory of the area.
     save_csv : bool
@@ -104,19 +101,38 @@ def check_area_needs_processing(area: Area, n_stgrid: int, total_stgrids: int,
     bool
         True if the area needs processing, False otherwise. 
     
-    """        
+    """
+     # Check for merged files if they exist
+    if save_csv:
+        merged_csv = Path(area.output_path) / f"{area.id}_aggregated.csv"
+        if merged_csv.exists():
+            return False
+            
+    if save_nc:
+        merged_nc = Path(area.output_path) / f"{area.id}_clipped.nc"
+        if merged_nc.exists():
+            return False
+
     filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"
     filename_aggr = f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv"
     
     clip_path = Path(area.output_path) / filename_clip
     aggr_path = Path(area.output_path) / filename_aggr
     
-    # If save_csv=False, we only need the clipped file
+    # If only saving NetCDF files
     if save_nc and not save_csv:
         return not clip_path.exists()
         
-    # If save_nc=False or both are True, we need the aggregated file
-    return not aggr_path.exists()
+    # If only saving CSV files
+    if save_csv and not save_nc:
+        return not aggr_path.exists()
+        
+    # If saving both
+    if save_nc and save_csv:
+        return not (clip_path.exists() and aggr_path.exists())
+    
+    # If neither file type is being saved, always process
+    return True
 
 class LocalDaskProcessor:
     def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
