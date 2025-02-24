@@ -226,8 +226,7 @@ class LocalDaskProcessor:
                             if self.skip_exist:
                                 areas_to_process = []
                                 for area in batch:
-                                    if check_area_needs_processing(area, n_stgrid, total_stgrids, 
-                                                                   self.skip_exist, self.save_nc, self.save_csv):
+                                    if check_area_needs_processing(area, n_stgrid, total_stgrids, self.save_nc, self.save_csv):
                                         areas_to_process.append(area)
                                     else:
                                         area_success[area.id] += 1
@@ -458,8 +457,7 @@ class SLURMDaskProcessor:
                         if self.skip_exist:
                             areas_to_process = []
                             for area in batch:
-                                if check_area_needs_processing(area, n_stgrid, total_stgrids, 
-                                                            self.skip_exist, self.save_nc, self.save_csv):
+                                if check_area_needs_processing(area, n_stgrid, total_stgrids, self.save_nc, self.save_csv):
                                     areas_to_process.append(area)
                                 else:
                                     area_success[area.id] += 1
@@ -655,8 +653,7 @@ class MPIDaskProcessor:
                     if self.skip_exist:
                         areas_to_process = []
                         for area in batch:
-                            if check_area_needs_processing(area, n_stgrid, total_stgrids, 
-                                                            self.skip_exist, self.save_nc, self.save_csv):
+                            if check_area_needs_processing(area, n_stgrid, total_stgrids, self.save_nc, self.save_csv):
                                 areas_to_process.append(area)
                             else:
                                 area_success[area.id] += 1
