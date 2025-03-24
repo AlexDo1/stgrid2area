@@ -712,21 +712,39 @@ class MPIDaskProcessor:
                         except Exception as e:
                             self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
 
-                    client.cancel(futures)
-                    for grid in area_stgrids.values():
-                        if hasattr(grid, 'close'):
-                            try:
-                                grid.close()
-                            except Exception:
-                                pass
-                        client.cancel(grid)
-                    del area_stgrids, tasks, futures
-                    gc.collect()
+                    # Clean up after each sub-batch
+                            client.cancel(futures)
+                            # Clean up any remaining area_stgrids
+                            for area_id, grid in list(area_stgrids.items()):
+                                if hasattr(grid, 'close'):
+                                    try:
+                                        grid.close()
+                                    except Exception:
+                                        pass
+                                client.cancel(grid)
+                                del area_stgrids[area_id]
+                            
+                            del futures, tasks
+                            gc.collect()
+                            
+                            # Force garbage collection on all workers
+                            client.run(gc.collect)
 
                 except Exception as e:
                     self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
 
-            # For dask-mpi, it might be simpler to run all batches in one go and not restart the client between batches.
+            # With MPI, restarting the client is challenging, so instead do a thorough memory cleanup            
+            # Force garbage collection on all workers
+            client.run(gc.collect)
+            
+            # Purge worker caches if possible (newer dask versions)
+            try:
+                client.run_on_scheduler(lambda dask_scheduler: dask_scheduler.clear_task_state())
+            except Exception:
+                pass
+            
+            gc.collect()
+
             self.logger.info(f"Finished batch {i}/{len(area_batches)}.")
 
         successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
