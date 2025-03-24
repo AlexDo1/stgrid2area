@@ -736,15 +736,7 @@ class MPIDaskProcessor:
             # With MPI, restarting the client is challenging, so instead do a thorough memory cleanup            
             # Force garbage collection on all workers
             client.run(gc.collect)
-            
-            # Purge worker caches if possible (newer dask versions)
-            try:
-                client.run_on_scheduler(lambda dask_scheduler: dask_scheduler.clear_task_state())
-            except Exception:
-                pass
-            
-            gc.collect()
-
+        
             self.logger.info(f"Finished batch {i}/{len(area_batches)}.")
 
         successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
