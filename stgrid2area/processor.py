@@ -69,6 +69,9 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
                 Path(area.output_path, "fallback_xarray").touch()
                 result = area.aggregate(clipped, variable, "xarray", operations, 
                                         save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'exact_extract', 'xarray', or 'fallback_xarray'.")
+        
         return result
     except Exception as e:
         raise e
