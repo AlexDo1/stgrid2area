@@ -14,7 +14,7 @@ import numpy as np
 from .area import Area
 
 
-def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: str, method: str, operations: list[str], skip_exist: bool, 
+def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variables: Union[str, list[str]], method: str, operations: list[str], skip_exist: bool, 
                  n_stgrid: int, total_stgrids: int, save_nc: bool = True, save_csv: bool = True) -> pd.DataFrame:
     """
     Standalone function to process (clip and aggregate) a single area.  
@@ -28,8 +28,8 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
         The area to process.
     stgrid : xr.Dataset or xr.DataArray
         The spatiotemporal grid to clip to the area.
-    variable : str
-        The variable in stgrid to aggregate.
+    variables : str or list[str]
+        The variable(s) in stgrid to aggregate. Can be a single variable name (str) or a list of variable names.
     method : str
         The method to use for aggregation.
     operations : list of str
@@ -48,26 +48,31 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variable: 
     Returns
     -------
     pd.DataFrame
-        The aggregated variable as a pandas DataFrame.
+        The aggregated variables as a pandas DataFrame.
     
     """
-    filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"
+    # Convert single variable to list for consistent processing
+    if isinstance(variables, str):
+        variables = [variables]
+        
+    # Generate filenames based on area ID and number of stgrids
+    filename_clip = f"{area.id}_{n_stgrid}_clipped.nc" if total_stgrids > 1 else f"{area.id}_clipped.nc"  
     filename_aggr = f"{area.id}_{n_stgrid}_aggregated.csv" if total_stgrids > 1 else f"{area.id}_aggregated.csv"
     
     try:
         clipped = area.clip(stgrid, save_result=save_nc, skip_exist=skip_exist, filename=filename_clip)
     
         if method in ["exact_extract", "xarray"]:
-            result = area.aggregate(clipped, variable, method, operations, 
+            result = area.aggregate(clipped, variables, method, operations, 
                                     save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
         elif method == "fallback_xarray":
             try:
-                result = area.aggregate(clipped, variable, "exact_extract", operations, 
+                result = area.aggregate(clipped, variables, "exact_extract", operations, 
                                         save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
             except ValueError:
                 # Indicate fallback was used
                 Path(area.output_path, "fallback_xarray").touch()
-                result = area.aggregate(clipped, variable, "xarray", operations, 
+                result = area.aggregate(clipped, variables, "xarray", operations, 
                                         save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
         else:
             raise ValueError(f"Unknown method: {method}. Use 'exact_extract', 'xarray', or 'fallback_xarray'.")
@@ -138,22 +143,33 @@ def check_area_needs_processing(area: Area, n_stgrid: int, total_stgrids: int, s
     return True
 
 class LocalDaskProcessor:
-    def __init__(self, areas: list[Area], stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
-                 variable: str, method: str, operations: list[str], n_workers: int = None, skip_exist: bool = False, batch_size: int = None, 
-                 save_nc: bool = True, save_csv: bool = True, logger: logging.Logger = None) -> None:
+    def __init__(self,
+                 areas: list[Area],
+                 stgrid: Union[Union[xr.Dataset], list[Union[xr.Dataset]]],
+                 variables: Union[str, list[str]],
+                 method: str, operations: list[str],
+                 n_workers: int = None,
+                 skip_exist: bool = False,
+                 batch_size: int = None,
+                 save_nc: bool = True,
+                 save_csv: bool = True,
+                 logger: logging.Logger = None) -> None:
         """
-        Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.
+        Initialize a LocalDaskProcessor for efficient parallel processing on a single machine.  
+        In general, it is recommended to use this processor if you use only one machine, in this 
+        case LocalDaskProcessor will spin up a Dask cluster itself. If you want to use multiple machines,
+        consider using `MPIDaskProcessor`.
 
         Parameters
         ----------
         areas : list of Area
             List of area objects to process.
-        stgrid : xr.Dataset or xr.DataArray
+        stgrid : xr.Dataset or list of xr.Dataset
             The spatiotemporal data to process.  
-            If stgrid is a list of xr.Dataset or xr.DataArray, the processor will process each one in turn. Splitting the data into multiple
-            xr.Dataset or xr.DataArray objects can be useful when the spatiotemporal data is too large to fit into memory.
-        variable : str
-            The variable in stgrid to aggregate.
+            If stgrid is a list of xr.Dataset, the processor will process each one in turn. Splitting the data into multiple
+            xr.Dataset objects can be useful when the spatiotemporal data is too large to fit into memory.
+        variables : str or list[str]
+            The variable(s) in stgrid to aggregate. Can be a single variable name (str) or a list of variable names.
         method : str, optional
             The method to use for aggregation.  
             Can be "exact_extract", "xarray" or "fallback_xarray".  
@@ -183,7 +199,7 @@ class LocalDaskProcessor:
             self.stgrid = stgrid
         else:
             raise ValueError("stgrid must be an xr.Dataset, xr.DataArray or a list of xr.Dataset or xr.DataArray.")
-        self.variable = variable
+        self.variables = variables
         self.method = method
         self.operations = operations
         self.n_workers = n_workers or os.cpu_count()
@@ -261,7 +277,7 @@ class LocalDaskProcessor:
                                     delayed(process_area)(
                                         area,
                                         area_stgrids[area.id], # Use area-specific grid
-                                        self.variable,
+                                        self.variables,
                                         self.method,
                                         self.operations,
                                         self.skip_exist,
@@ -318,7 +334,7 @@ class SLURMDaskProcessor:
     def __init__(self,
                  areas: list[Area],
                  stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]],
-                 variable: str,
+                 variables: Union[str, list[str]],
                  method: str,
                  operations: list[str],
                  desired_jobs: int,      # Total number of worker jobs to launch
@@ -349,8 +365,8 @@ class SLURMDaskProcessor:
             List of area objects to process.
         stgrid : xr.Dataset, xr.DataArray or list of them
             The spatiotemporal data to process.
-        variable : str
-            The variable in stgrid to aggregate.
+        variables : str or list[str]
+            The variable(s) in stgrid to aggregate. Can be a single variable name (str) or a list of variable names.
         method : str
             Aggregation method ("exact_extract", "xarray", or "fallback_xarray").
         operations : list of str
@@ -360,7 +376,7 @@ class SLURMDaskProcessor:
         queue : str
             The SLURM queue name (e.g., "multiple_il").
         cores : int
-            Number of cores per worker job (should match your HPC’s ntasks-per-node).
+            Number of cores per worker job (should match your HPC's ntasks-per-node).
         memory : str
             Total memory per worker job (e.g., "124800MB").
         walltime : str
@@ -388,7 +404,7 @@ class SLURMDaskProcessor:
             self.stgrid = stgrid
         else:
             raise ValueError("stgrid must be an xr.Dataset, xr.DataArray or a list of them.")
-        self.variable = variable
+        self.variables = variables
         self.method = method
         self.operations = operations
         self.desired_jobs = desired_jobs
@@ -488,7 +504,7 @@ class SLURMDaskProcessor:
                             delayed(process_area)(
                                 area,
                                 area_stgrids[area.id],
-                                self.variable,
+                                self.variables,
                                 self.method,
                                 self.operations,
                                 self.skip_exist,
@@ -541,14 +557,12 @@ class SLURMDaskProcessor:
             self.logger.error(f"An error occurred: {e}")
         finally:
             self.logger.info("Shutting down Dask client and cluster.")
-            client.close()
-            cluster.close()
 
 class MPIDaskProcessor:
     def __init__(self, 
                  areas: list[Area], 
-                 stgrid: Union[Union[xr.Dataset, xr.DataArray], list[Union[xr.Dataset, xr.DataArray]]], 
-                 variable: str, 
+                 stgrid: Union[Union[xr.Dataset], list[Union[xr.Dataset]]], 
+                 variables: Union[str, list[str]], 
                  method: str, 
                  operations: list[str],
                  skip_exist: bool = False, 
@@ -566,12 +580,12 @@ class MPIDaskProcessor:
         ----------
         areas : list of Area
             List of area objects to process.
-        stgrid : xr.Dataset or xr.DataArray
+        stgrid : xr.Dataset or list of xr.Dataset
             The spatiotemporal data to process.  
-            If stgrid is a list of xr.Dataset or xr.DataArray, the processor will process each one in turn. Splitting the data into multiple
-            xr.Dataset or xr.DataArray objects can be useful when the spatiotemporal data is too large to fit into memory.
-        variable : str
-            The variable in stgrid to aggregate.
+            If stgrid is a list of xr.Dataset, the processor will process each one in turn. Splitting the data into multiple
+            xr.Dataset objects can be useful when the spatiotemporal data is too large to fit into memory.
+        variables : str or list[str]
+            The variable(s) in stgrid to aggregate. Can be a single variable name (str) or a list of variable names.
         method : str, optional
             The method to use for aggregation.  
             Can be "exact_extract", "xarray" or "fallback_xarray".  
@@ -599,7 +613,7 @@ class MPIDaskProcessor:
         else:
             raise ValueError("stgrid must be an xr.Dataset, xr.DataArray or a list of them.")
             
-        self.variable = variable
+        self.variables = variables
         self.method = method
         self.operations = operations
         # n_workers is not used here because dask-mpi will launch as many processes as allocated.
@@ -685,7 +699,7 @@ class MPIDaskProcessor:
                         delayed(process_area)(
                             area,
                             area_stgrids[area.id],
-                            self.variable,
+                            self.variables,
                             self.method,
                             self.operations,
                             self.skip_exist,
@@ -715,7 +729,7 @@ class MPIDaskProcessor:
                         except Exception as e:
                             self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
 
-                    # Clean up after each sub-batch
+                            # Clean up after each sub-batch
                             client.cancel(futures)
                             # Clean up any remaining area_stgrids
                             for area_id, grid in list(area_stgrids.items()):
