@@ -121,7 +121,7 @@ def test_aggregate(raster_data, area_data):
     clipped_ds = area.clip(raster_data)
 
     # Aggregate the clipped data spatially
-    aggregated_df = area.aggregate(clipped_ds, variable="var", method="exact_extract", operations=["mean", "min"])
+    aggregated_df = area.aggregate(clipped_ds, variables="var", method="exact_extract", operations=["mean", "min"])
 
     assert isinstance(aggregated_df, pd.DataFrame)
     assert not aggregated_df.empty
