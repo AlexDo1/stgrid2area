@@ -4,5 +4,5 @@ xarray[io]
 rioxarray
 exactextract
 dask[distributed]
-dask-jobqueue
+dask_mpi
 bokeh
