@@ -232,7 +232,7 @@ processor.run(client=client)
 
 ### Processing Multiple Time Periods
 
-If your data is too large to fit in memory, you can process it in chunks:
+If your stgrid data is too large to fit in memory, you can process it in chunks. The `LocalDaskProcessor` and `MPIDaskProcessor` classes can handle a list of xarray datasets, the clipped and aggregated results are saved for each input dataset separately, so you have to care about post-processing the results if you want to combine them later.
 
 ```python
 import xarray as xr
