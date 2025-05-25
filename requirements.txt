@@ -5,5 +5,4 @@ rioxarray
 exactextract
 dask[distributed]
 dask_mpi
-mpi4py
 bokeh
