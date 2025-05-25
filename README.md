@@ -253,3 +253,8 @@ processor = LocalDaskProcessor(
 # Run the processing
 processor.run()
 ```
+
+## stgrid2area-workflows
+
+The [stgrid2area-workflows](https://github.com/CAMELS-DE/stgrid2area-workflows) repository is a collection of implemented data processing workflows using the `stgrid2area` package. It is mainly used for processing meteorological input data for the CAMELS-DE dataset. It also includes Python scripts and SLURM job scripts for running the workflows on HPC systems.  
+Hence, it can serve as a reference for how to use `stgrid2area` in practice, even though the code is not always perfectly documented and under development.
