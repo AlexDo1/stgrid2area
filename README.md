@@ -6,18 +6,18 @@ Extract and aggregate spatio-temporal gridded data in netCDF or GRIB format to a
 
 `stgrid2area` is a Python package that simplifies the workflow of extracting and aggregating spatio-temporal gridded data (e.g., climate data, weather forecasts) to geometrically defined areas like catchments, administrative boundaries, or any other geographical region. The package handles the process of clipping gridded data to the specified area's boundaries and then calculating spatial statistics across the area.
 
-![Workflow Diagram Placeholder](docs/images/workflow_image.svg)
+![Clip and aggregate](docs/images/workflow_image.svg)
 
-*Figure: Workflow diagram showing the process of clipping and aggregating spatio-temporal gridded data to areas. Image from [https://doi.org/10.5194/essd-16-5625-2024](https://doi.org/10.5194/essd-16-5625-2024)*
+*Figure: Clip and aggregate spatio-temporal gridded data to areas. Image from [https://doi.org/10.5194/essd-16-5625-2024](https://doi.org/10.5194/essd-16-5625-2024)*
 
 ## Features
 
-- **Clip** spatio-temporal gridded data to area boundaries
-- **Aggregate** variables using various spatial statistics (mean, min, max, stdev, quantiles)
+- **Clip** spatio-temporal gridded data to area boundaries &rarr; `xarray.Dataset` or save to `.nc`
+- **Aggregate** variables using various spatial statistics (mean, min, max, stdev, quantiles) &rarr; `pd.DataFrame` or save to `.csv`
 - **Process multiple variables simultaneously** in a single operation
 - **Efficient parallel processing** options for large datasets and many areas
 - Support for both **weighted** ([exactextract](https://github.com/isciences/exactextract)) and **unweighted** (xarray) spatial statistics
-- **HPC integration** with single-node and MPI multi-node support for large-scale processing
+- **HPC integration** with single-node and MPI multi-node support for large-scale processing using [Dask](https://docs.dask.org/en/stable/)
 
 ## Installation
 
@@ -26,6 +26,13 @@ pip install stgrid2area
 ```
 
 ## Basic Usage
+
+The workflow for clipping and aggregating spatio-temporal gridded data to specified areas usually involves the following steps:
+1. **Read the spatio-temporal gridded (stgrid) data** (e.g., NetCDF or GRIB files) using `xarray`.
+2. **Read the geometries** (e.g., catchment boundaries, administrative boundaries) using `geopandas`.
+3. Do preprocessing if necessary, e.g. set the coordinate reference system (CRS) of the stgrid data (`stgrid.rio.write_crs("EPSG:4326")`) and reproject the geometries to match the CRS of the stgrid data using `geometries.to_crs(stgrid.crs)` or reformat the stgrid data if necessary.
+4. **Create an `Area` object** for each geometry, which encapsulates the clipping and aggregation logic. You can use the helper function `geodataframe_to_areas` to create a list of `Area` objects from a GeoDataFrame.
+5. **Clip and aggregate the gridded data** to the areas. You can either use `area.clip()` and `area.aggregate()` directly or use a processor class for parallel processing.
 
 ### Example 1: Basic Clipping and Aggregation
 
@@ -191,7 +198,8 @@ processor.run()
 
 #### MPIDaskProcessor
 
-For processing with MPI (Message Passing Interface) on HPC systems. This processor is designed to run on distributed systems with multiple nodes, allowing for efficient parallel processing of large datasets. You initialize Dask MPI client that is passed to the processor. On the HPC system, you would typically launch the Python script using `mpirun` inside a SLURM job script or similar.
+For processing with MPI (Message Passing Interface) on HPC systems. This processor is designed to run on distributed systems with multiple nodes, allowing for efficient parallel processing of large datasets.  
+To use this method you need to initialize a Dask MPI client yourself and pass it to `processor.run()`. On the HPC system, you would typically launch the Python processing script using `mpirun` inside a SLURM job script or similar.
 
 ```python
 from stgrid2area import MPIDaskProcessor
