@@ -253,7 +253,3 @@ processor = LocalDaskProcessor(
 # Run the processing
 processor.run()
 ```
-
-## License
-
-[MIT License](LICENSE)
