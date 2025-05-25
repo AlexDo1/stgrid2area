@@ -3,7 +3,6 @@ from typing import Union
 import gc
 from dask import delayed
 from dask.distributed import Client, LocalCluster, as_completed
-from dask_jobqueue import SLURMCluster
 import pandas as pd
 import xarray as xr
 import rioxarray
