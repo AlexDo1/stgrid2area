@@ -8,7 +8,9 @@ Clip and aggregate spatio-temporal gridded data in netCDF or GRIB format to spec
 
 ![Clip and aggregate](docs/images/workflow_image.svg)
 
-*Figure: Clip and aggregate spatio-temporal gridded data to areas. Image from [https://doi.org/10.5194/essd-16-5625-2024](https://doi.org/10.5194/essd-16-5625-2024)*
+*Figure: Clip and aggregate spatio-temporal gridded data to area. Image from [https://doi.org/10.5194/essd-16-5625-2024](https://doi.org/10.5194/essd-16-5625-2024)*.
+
+Extracting and aggregating data to areas is a common task in fields like hydrology and meteorology, where spatially distributed time series data (e.g. precipitation, air temperature) needs to be aggregated to catchments or other regions of interest. This is done by clipping the gridded data to the area boundaries and then spatially aggregating the data, meaning that for each time step, spatial statistics (e.g., mean, min, max, standard deviation) are calculated for the area. The result is a time series of aggregated values which can be saved as a CSV file.
 
 ## Features
 
