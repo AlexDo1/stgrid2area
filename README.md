@@ -1,10 +1,10 @@
 # stgrid2area
 
-Extract and aggregate spatio-temporal gridded data in netCDF or GRIB format to a specified area.
+Clip and aggregate spatio-temporal gridded data in netCDF or GRIB format to specified areas.
 
 ## Overview
 
-`stgrid2area` is a Python package that simplifies the workflow of extracting and aggregating spatio-temporal gridded data (e.g., climate data, weather forecasts) to geometrically defined areas like catchments, administrative boundaries, or any other geographical region. The package handles the process of clipping gridded data to the specified area's boundaries and then calculating spatial statistics across the area.
+`stgrid2area` is a Python package that simplifies the workflow of extracting and aggregating spatio-temporal gridded data (e.g., climate data, weather forecasts) to geometrically defined areas like catchments, administrative boundaries, or any other geographical region. The package handles the process of clipping gridded data to the specified area's boundaries and then calculating spatial statistics across the area. The package also provides processor classes for efficient processing of large gridded datasets and many areas in parallel and is optimized for HPC systems.
 
 ![Clip and aggregate](docs/images/workflow_image.svg)
 
@@ -14,9 +14,8 @@ Extract and aggregate spatio-temporal gridded data in netCDF or GRIB format to a
 
 - **Clip** spatio-temporal gridded data to area boundaries &rarr; `xarray.Dataset` or save to `.nc`
 - **Aggregate** variables using various spatial statistics (mean, min, max, stdev, quantiles) &rarr; `pd.DataFrame` or save to `.csv`
-- **Process multiple variables simultaneously** in a single operation
-- **Efficient parallel processing** options for large datasets and many areas
 - Support for both **weighted** ([exactextract](https://github.com/isciences/exactextract)) and **unweighted** (xarray) spatial statistics
+- **Efficient parallel processing** options for large datasets and many areas
 - **HPC integration** with single-node and MPI multi-node support for large-scale processing using [Dask](https://docs.dask.org/en/stable/)
 
 ## Installation
