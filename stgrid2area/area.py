@@ -111,7 +111,7 @@ class Area():
         
         return clipped
     
-    def aggregate(self, stgrid: xr.Dataset, variable: str, method: str, operations: list[str], save_result: bool = False, skip_exist: bool = False, filename: str = None) -> pd.DataFrame:
+    def aggregate(self, stgrid: xr.Dataset, variables: Union[str, list[str]], method: str, operations: list[str], save_result: bool = False, skip_exist: bool = False, filename: str = None) -> pd.DataFrame:
         """
         Wrapper function to aggregate the spatiotemporal grid to the area's geometry using either the exact_extract or xarray method.  
         Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped
@@ -127,11 +127,10 @@ class Area():
         Parameters
         ----------
         stgrid : xr.Dataset
-            The spatiotemporal grid to aggregate. Must be a xr.Dataset, as only one variable
-            can be aggregated.
-        variable : str
-            The variable in stgrid to aggregate.
-        method : str, optional
+            The spatiotemporal grid to aggregate. Must be a xr.Dataset.
+        variables : str or list[str]
+            The variable(s) in stgrid to aggregate. Can be a single variable name (str) or a list of variable names.
+        method : str
             The method to use for aggregation.  
             Can be "exact_extract", "xarray".
         operations : list[str]
@@ -143,26 +142,30 @@ class Area():
             The default is False.
         skip_exist : bool, optional
             If True, the aggregation will be skipped if the aggregated timeseries already exists.  
-            In this case, the existing timeseries grid will be returned.  
+            In this case, the existing timeseries will be returned.  
             The default is False.
         filename : str, optional
-            The filename of the aggregated grid when written to disk.  
-            If None, the filename will be the id of the area + "_aggregated.csv".  
+            The filename of the aggregated results when written to disk.  
+            If None, the filename will be the id of the area + "_aggregated.csv". 
             The default is None.
 
         Returns
         -------
         pd.DataFrame
-            The aggregated spatiotemporal grid.
+            The aggregated spatiotemporal grid with columns for each variable and operation combination.
 
         """
+        # Convert single variable to list for consistent processing
+        if isinstance(variables, str):
+            variables = [variables]
+        
         # Parse the filename
         if filename is None:
             filename = f"{self.id}_aggregated.csv"
         elif not filename.endswith(".csv"):
             filename = f"{filename}.csv"
 
-        # Check if the aggregation should be skipped if the aggregated grid already exists
+        # Check if the aggregation should be skipped if the aggregated results already exist
         if skip_exist and (self.output_path / filename).exists():
             return pd.read_csv(self.output_path / filename, index_col="time")
         
@@ -170,8 +173,10 @@ class Area():
         if not isinstance(stgrid, xr.Dataset):
             raise TypeError(f"{self.id}: The stgrid must be a xarray Dataset.")
         
-        # Select the variable in the stgrid
-        stgrid = stgrid[variable]
+        # Validate that all variables exist in the dataset
+        missing_vars = [var for var in variables if var not in stgrid.data_vars]
+        if missing_vars:
+            raise ValueError(f"{self.id}: Variables {missing_vars} not found in the dataset. Available variables: {list(stgrid.data_vars)}")
 
         # Check if operations is a list
         if not isinstance(operations, list):
@@ -181,9 +186,9 @@ class Area():
         stgrid = stgrid.load()
 
         if method == "exact_extract":
-            df_timeseries = self._aggregate_exact_extract(stgrid, variable, operations)
+            df_timeseries = self._aggregate_exact_extract(stgrid, variables, operations)
         elif method == "xarray":
-            df_timeseries = self._aggregate_xarray(stgrid, variable, operations)
+            df_timeseries = self._aggregate_xarray(stgrid, variables, operations)
         else:
             raise ValueError(f"{self.id}: The method {method} is not supported. Use 'exact_extract', 'xarray'.")
     
@@ -196,7 +201,7 @@ class Area():
 
         return df_timeseries
 
-    def _aggregate_exact_extract(self, stgrid: xr.DataArray, variable: str, operations: list[str]) -> pd.DataFrame:
+    def _aggregate_exact_extract(self, stgrid: xr.Dataset, variables: list[str], operations: list[str]) -> pd.DataFrame:
         """
         Aggregate the spatiotemporal grid to the area's geometry.  
         Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped  
@@ -208,10 +213,10 @@ class Area():
 
         Parameters
         ----------
-        stgrid : xr.DataArray
-            The spatiotemporal grid to aggregate. Must be a xr.DataArray with the variable to aggregate.
-        variable : str
-            The variable in stgrid to aggregate.
+        stgrid : xr.Dataset
+            The spatiotemporal grid to aggregate. Must be a xr.Dataset.
+        variables : list[str]
+            The variables in stgrid to aggregate.
         operations : list[str]
             The operations to use for aggregation.  
             Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
@@ -220,54 +225,74 @@ class Area():
         Returns
         -------
         pd.DataFrame
-            The aggregated spatiotemporal grid.
-
+            The aggregated spatiotemporal grid with columns for each variable and operation combination.
         """
-        # Check dimensionality of gridded data, calculating weighted statistics with exactaxtract can only be done if shape is >= (2, 2)
-        if 1 in stgrid.isel(time=0).shape:
-            raise ValueError(f"{self.id}: Gridded data has spatial dimensionality of 1 in at least one direction, aggregation for 1-D data is not possible with the exact_extract method, you can use area.aggregate_xarray() instead.")
-        
         # Set the crs of the geometry to the crs of the stgrid
         geometry = self.geometry.to_crs(stgrid.rio.crs.to_string())
-
-        # Aggregate the clipped grid to the geometry
-        with warnings.catch_warnings():
-            # Suppress the warning that the spatial reference system of the input features does not exactly match the raster, see https://github.com/isciences/exactextract/issues/159
-            warnings.filterwarnings("ignore", message="Spatial reference system of input features does not exactly match raster.")
-            df = exact_extract(stgrid, geometry, operations, output="pandas")
-
-        # Transpose dataframe
-        df = df.T
-
-        # Get the time index from the xarray dataset
-        time_index = stgrid.time.values
         
-        # Create a list of dataframes, each dataframe contains the timeseries for one statistic
-        sliced_dfs = [df.iloc[i:i+len(time_index)] for i in range(0, len(df), len(time_index))]
-
-        # Set the index to the time values and rename the columns
-        for i, df in enumerate(sliced_dfs):
-            df.index = time_index
-            df.columns = [f"{variable}_{operations[i]}"]
+        # Store results for all variables
+        all_dfs = []
         
-            # Replace quantile column names to not include brackets, equal sign and points
-            for col in df.columns:
-                if "quantile" in col:
-                    # get the quantile value
-                    q = int(float(col.split('=')[1].split(')')[0]) * 100)
-
-                    # replace the column name
-                    df = df.rename(columns={col: f"{variable}_quantile{q}"})         
-
-        # Concatenate the dataframes
-        df_timeseries = pd.concat(sliced_dfs, axis=1)
-
+        # Process each variable
+        for variable in variables:
+            # Get the DataArray for this variable
+            stgrid_var = stgrid[variable]
+            
+            # Check dimensionality of gridded data, calculating weighted statistics with exactaxtract can only be done if shape is >= (2, 2)
+            if 1 in stgrid_var.isel(time=0).shape:
+                raise ValueError(f"{self.id}: Gridded data for variable '{variable}' has spatial dimensionality of 1 in at least one direction, aggregation for 1-D data is not possible with the exact_extract method, you can use method='xarray' instead.")
+            
+            # Aggregate the clipped grid to the geometry using exact_extract
+            with warnings.catch_warnings():
+                # Suppress the warning that the spatial reference system of the input features does not exactly match the raster
+                warnings.filterwarnings("ignore", message="Spatial reference system of input features does not exactly match raster.")
+                
+                try:
+                    df = exact_extract(stgrid_var, geometry, operations, output="pandas")
+                    
+                    # Transpose dataframe
+                    df = df.T
+                    
+                    # Get the time index from the xarray dataset
+                    time_index = stgrid_var.time.values
+                    
+                    # Create a list of dataframes, each dataframe contains the timeseries for one statistic
+                    sliced_dfs = [df.iloc[i:i+len(time_index)] for i in range(0, len(df), len(time_index))]
+                    
+                    # Set the index to the time values and rename the columns
+                    for i, df_slice in enumerate(sliced_dfs):
+                        df_slice.index = time_index
+                        df_slice.columns = [f"{variable}_{operations[i]}"]
+                    
+                        # Replace quantile column names to not include brackets, equal sign and points
+                        for col in df_slice.columns:
+                            if "quantile" in col:
+                                # get the quantile value
+                                q = int(float(col.split('=')[1].split(')')[0]) * 100)
+                                
+                                # replace the column name
+                                df_slice.rename(columns={col: f"{variable}_quantile{q}"}, inplace=True)
+                    
+                    # Concatenate the dataframes for this variable's operations
+                    var_df = pd.concat(sliced_dfs, axis=1)
+                    all_dfs.append(var_df)
+                
+                except Exception as e:
+                    raise ValueError(f"{self.id}: Error processing variable '{variable}': {str(e)}")
+        
+        # Ensure we have at least one successful variable processed
+        if not all_dfs:
+            raise ValueError(f"{self.id}: No variables were successfully processed")
+        
+        # Concatenate all variables' dataframes
+        df_timeseries = pd.concat(all_dfs, axis=1)
+        
         # Label the index
         df_timeseries.index.name = "time"
         
         return df_timeseries
     
-    def _aggregate_xarray(self, stgrid: xr.DataArray, variable: str, operations: list[str]) -> pd.DataFrame:
+    def _aggregate_xarray(self, stgrid: xr.Dataset, variables: list[str], operations: list[str]) -> pd.DataFrame:
         """
         Aggregate the spatiotemporal grid to the area's geometry.  
         Usually, you first perform the `clip` and then aggregate the clipped stgrid. Using the clipped  
@@ -279,64 +304,88 @@ class Area():
 
         Parameters
         ----------
-        stgrid : xr.DataArray
-            The spatiotemporal grid to aggregate. Must be a xr.DataArray, as only one variable  
-            can be aggregated.
-        variable : str
-            The variable in stgrid to aggregate.
+        stgrid : xr.Dataset
+            The spatiotemporal grid to aggregate.
+        variables : list[str]
+            The variables in stgrid to aggregate.
         operations : list[str]
             The operations to use for aggregation.  
             Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
-            supported by the [exact_extract](https://github.com/isciences/exactextract) package.
-        save_result : bool, optional
-            If True, the aggregated timeseries will be saved to the output directory of the area.  
-            The default is False.
-        skip_exist : bool, optional
-            If True, the aggregation will be skipped if the aggregated timeseries already exists.  
-            In this case, the existing timeseries grid will be returned.  
-            The default is False.
+            supported by xarray.
 
         Returns
         -------
         pd.DataFrame
-            The aggregated spatiotemporal grid.
+            The aggregated spatiotemporal grid with columns for each variable and operation combination.
 
         """
         # Infer the spatial dimensions of the grid based on common dimension names TODO: improve this / spatial dims as input?
         spatial_dims = [dim for dim in stgrid.dims if dim in ["latitude", "longitude", "lat", "lon", "x", "y", "X", "Y"]]        
 
-        # Define the computations
-        for operation in operations:
-            if operation == "mean":
-                result = stgrid.mean(dim=spatial_dims)
-            elif operation == "min":
-                result = stgrid.min(dim=spatial_dims)
-            elif operation == "median":
-                result = stgrid.median(dim=spatial_dims)
-            elif operation == "max":
-                result = stgrid.max(dim=spatial_dims)
-            elif operation == "stdev":
-                result = stgrid.std(dim=spatial_dims)
-            elif "quantile" in operation:
-                q = float(operation.split("=")[1].split(")")[0])
-                result = stgrid.quantile(q, dim=spatial_dims)
-            else:
-                raise ValueError(f"{self.id}: The operation {operation} is not supported.")
-            
-            # Compute the result
-            result = result.compute()
-            
-            # Convert the result to a DataFrame
-            df = result.to_dataframe()[[variable]]
-            df.columns = [f"{variable}_{operation}" if not "quantile" in operation else f"{variable}_quantile{int(q*100)}"]
+        # Store results for all variables
+        all_dfs = []
 
-            # Concatenate the dataframes
-            if operation == operations[0]:
-                df_timeseries = df
-            else:
-                df_timeseries = pd.concat([df_timeseries, df], axis=1)
+        # Process each variable
+        for variable in variables:
+            # Get the DataArray for this variable
+            stgrid_var = stgrid[variable]
+
+            # Store dataframes for each operation for this variable
+            variable_dfs = []
+            
+            try:
+                # Apply each operation to this variable
+                for operation in operations:
+                    if operation == "mean":
+                        result = stgrid_var.mean(dim=spatial_dims)
+                    elif operation == "min":
+                        result = stgrid_var.min(dim=spatial_dims)
+                    elif operation == "median":
+                        result = stgrid_var.median(dim=spatial_dims)
+                    elif operation == "max":
+                        result = stgrid_var.max(dim=spatial_dims)
+                    elif operation == "stdev":
+                        result = stgrid_var.std(dim=spatial_dims)
+                    elif "quantile" in operation:
+                        q = float(operation.split("=")[1].split(")")[0])
+                        result = stgrid_var.quantile(q, dim=spatial_dims)
+                    else:
+                        raise ValueError(f"{self.id}: The operation {operation} is not supported.")
+                    
+                    # Compute the result
+                    result = result.compute()
+                    
+                    # Convert the result to a DataFrame
+                    df = result.to_dataframe()
+                    
+                    # Format column name
+                    if "quantile" in operation:
+                        q = float(operation.split("=")[1].split(")")[0])
+                        column_name = f"{variable}_quantile{int(q*100)}"
+                    else:
+                        column_name = f"{variable}_{operation}"
+                    
+                    # Select only the variable column and rename it
+                    df = df[[variable]].rename(columns={variable: column_name})
+                    
+                    # Append to list of dataframes for this variable
+                    variable_dfs.append(df)
+                
+                # Concatenate all operations for this variable
+                if variable_dfs:
+                    var_df = pd.concat(variable_dfs, axis=1)
+                    all_dfs.append(var_df)
+            except Exception as e:
+                raise ValueError(f"{self.id}: Error processing variable '{variable}': {str(e)}")
+
+        # Ensure we have at least one successful variable processed
+        if not all_dfs:
+            raise ValueError(f"{self.id}: No variables were successfully processed")
+            
+        # Concatenate all variables
+        df_timeseries = pd.concat(all_dfs, axis=1)
 
         # Label the index
         df_timeseries.index.name = "time"
-
+        
         return df_timeseries

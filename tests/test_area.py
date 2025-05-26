@@ -67,6 +67,54 @@ def area_data():
     return gdf
 
 
+@pytest.fixture
+def multi_var_raster_data():
+    """
+    Create an example xarray Dataset with multiple variables over multiple time steps.
+    
+    """
+    # Create data for 3 time steps for variable 1
+    data1 = np.array([[[1, 2, 3, 4],
+                      [5, 6, 7, 8],
+                      [9, 10, 11, 12],
+                      [13, 14, 15, 16]],
+
+                     [[2, 3, 4, 5],
+                      [6, 7, 8, 9],
+                      [10, 11, 12, 13],
+                      [14, 15, 16, 17]],
+
+                     [[3, 4, 5, 6],
+                      [7, 8, 9, 10],
+                      [11, 12, 13, 14],
+                      [15, 16, 17, 18]]])
+    
+    # Create data for 3 time steps for variable 2 (just adding 10 to all values)
+    data2 = data1 + 10
+
+    # Define the coordinates
+    times = pd.date_range("2023-01-01", periods=3)
+    coords = {
+        "time": times,
+        "x": np.array([49.0, 49.1, 49.2, 49.3]),
+        "y": np.array([8.4, 8.5, 8.6, 8.7])
+    }
+
+    # Create a xarray Dataset with multiple variables
+    ds = xr.Dataset(
+        {
+            "var1": (["time", "y", "x"], data1),
+            "var2": (["time", "y", "x"], data2)
+        },
+        coords=coords
+    )
+
+    # Add a CRS to the dataset
+    ds.rio.write_crs("EPSG:4326", inplace=True)
+
+    return ds
+
+
 def test_area_initialization(area_data):
     """
     Test the initialization of an Area object.
@@ -121,7 +169,7 @@ def test_aggregate(raster_data, area_data):
     clipped_ds = area.clip(raster_data)
 
     # Aggregate the clipped data spatially
-    aggregated_df = area.aggregate(clipped_ds, variable="var", method="exact_extract", operations=["mean", "min"])
+    aggregated_df = area.aggregate(clipped_ds, variables="var", method="exact_extract", operations=["mean", "min"])
 
     assert isinstance(aggregated_df, pd.DataFrame)
     assert not aggregated_df.empty
@@ -151,3 +199,86 @@ def test_aggregate(raster_data, area_data):
     expected_df.index.name = "time"
 
     assert pd.testing.assert_frame_equal(aggregated_df, expected_df, check_dtype=False) is None
+
+
+def test_aggregate_multiple_variables(multi_var_raster_data, area_data):
+    """
+    Test aggregating multiple variables at once.
+    
+    """
+    # Create an Area object
+    area = Area(geometry=area_data, id="test", output_dir="/tmp/output")
+
+    # First, clip the data to the area
+    clipped_ds = area.clip(multi_var_raster_data)
+
+    # Aggregate multiple variables in the clipped data spatially
+    aggregated_df = area.aggregate(clipped_ds, variables=["var1", "var2"], method="exact_extract", operations=["mean", "max"])
+
+    assert isinstance(aggregated_df, pd.DataFrame)
+    assert not aggregated_df.empty
+    # Should have 4 columns (2 variables × 2 operations)
+    assert aggregated_df.shape == (3, 4)
+    
+    # Check column names follow expected pattern: {variable}_{operation}
+    expected_columns = ["var1_mean", "var1_max", "var2_mean", "var2_max"]
+    for col in expected_columns:
+        assert col in aggregated_df.columns
+    
+    # Expected clipped values for all time steps for var1
+    expected_clipped_var1 = np.array([[[1,  2,  3],
+                                      [5,  6,  7],
+                                      [9, 10, 11]],
+
+                                     [[2,  3,  4],
+                                      [6,  7,  8],
+                                      [10, 11, 12]],
+
+                                     [[3,  4,  5],
+                                      [7,  8,  9],
+                                      [11, 12, 13]]])
+    
+    # Expected clipped values for all time steps for var2 (var1 + 10)
+    expected_clipped_var2 = expected_clipped_var1 + 10
+
+    # Calculate expected values
+    expected_means_var1 = [expected_clipped_var1[i].mean() for i in range(3)]
+    expected_maxes_var1 = [expected_clipped_var1[i].max() for i in range(3)]
+    expected_means_var2 = [expected_clipped_var2[i].mean() for i in range(3)]
+    expected_maxes_var2 = [expected_clipped_var2[i].max() for i in range(3)]
+
+    # Make a dataframe with the expected values
+    expected_df = pd.DataFrame({
+        "var1_mean": expected_means_var1,
+        "var1_max": expected_maxes_var1,
+        "var2_mean": expected_means_var2,
+        "var2_max": expected_maxes_var2
+    }, index=clipped_ds.time.values)
+    expected_df.index.name = "time"
+
+    assert pd.testing.assert_frame_equal(aggregated_df, expected_df, check_dtype=False) is None
+
+
+def test_aggregate_xarray_multiple_variables(multi_var_raster_data, area_data):
+    """
+    Test aggregating multiple variables at once using the xarray method.
+    
+    """
+    # Create an Area object
+    area = Area(geometry=area_data, id="test", output_dir="/tmp/output")
+
+    # First, clip the data to the area
+    clipped_ds = area.clip(multi_var_raster_data)
+
+    # Aggregate multiple variables in the clipped data spatially using xarray method
+    aggregated_df = area.aggregate(clipped_ds, variables=["var1", "var2"], method="xarray", operations=["mean", "max"])
+
+    assert isinstance(aggregated_df, pd.DataFrame)
+    assert not aggregated_df.empty
+    # Should have 4 columns (2 variables × 2 operations)
+    assert aggregated_df.shape == (3, 4)
+    
+    # Check column names follow expected pattern: {variable}_{operation}
+    expected_columns = ["var1_mean", "var1_max", "var2_mean", "var2_max"]
+    for col in expected_columns:
+        assert col in aggregated_df.columns
