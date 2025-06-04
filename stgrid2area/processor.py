@@ -66,9 +66,19 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variables:
                                     save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
         elif method == "fallback_xarray":
             try:
+                # Try to use exact_extract first
                 result = area.aggregate(clipped, variables, "exact_extract", operations, 
                                         save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
-            except ValueError:
+            except ValueError as e:
+                # Handle exact_extract specific errors (1-D data dimensionality)
+                if "spatial dimensionality of 1" in str(e) or "aggregation for 1-D data is not possible" in str(e):
+                    # Indicate fallback was used
+                    Path(area.output_path, "fallback_xarray").touch()
+                    result = area.aggregate(clipped, variables, "xarray", operations, 
+                                            save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
+                else:
+                    # Re-raise other ValueErrors that we don't know how to handle
+                    raise e
                 # Indicate fallback was used
                 Path(area.output_path, "fallback_xarray").touch()
                 result = area.aggregate(clipped, variables, "xarray", operations, 
