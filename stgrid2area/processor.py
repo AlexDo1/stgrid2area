@@ -501,26 +501,39 @@ class MPIDaskProcessor:
                         except Exception as e:
                             self.logger.error(f"{area_id}, stgrid {n_stgrid} --- Error occurred: {e}")
 
-                            # Clean up after each sub-batch
-                            client.cancel(futures)
-                            # Clean up any remaining area_stgrids
-                            for area_id, grid in list(area_stgrids.items()):
-                                if hasattr(grid, 'close'):
-                                    try:
-                                        grid.close()
-                                    except Exception:
-                                        pass
-                                client.cancel(grid)
-                                del area_stgrids[area_id]
+                    # Clean up after each sub-batch (moved outside the for loop)
+                    client.cancel(futures)
+                    # Clean up any remaining area_stgrids
+                    for area_id, grid in list(area_stgrids.items()):
+                        if hasattr(grid, 'close'):
+                            try:
+                                grid.close()
+                            except Exception:
+                                pass
+                        client.cancel(grid)
+                        del area_stgrids[area_id]
+                    
+                    del futures, tasks
+                    gc.collect()
                             
-                            del futures, tasks
-                            gc.collect()
-                            
-                            # Force garbage collection on all workers
-                            client.run(gc.collect)
+                    # Force garbage collection on all workers
+                    client.run(gc.collect)
 
                 except Exception as e:
                     self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
+                    # Only clean up what we know exists and might cause issues
+                    try:
+                        if 'futures' in locals():
+                            client.cancel(futures)
+                        if 'area_stgrids' in locals():
+                            for grid in area_stgrids.values():
+                                if hasattr(grid, 'close'):
+                                    grid.close()
+                    except Exception:
+                        pass  # Ignore cleanup errors
+                    
+                    # Force garbage collection to free memory
+                    gc.collect()
 
             # With MPI, restarting the client is challenging, so instead do a thorough memory cleanup            
             # Force garbage collection on all workers
