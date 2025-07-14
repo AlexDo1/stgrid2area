@@ -81,10 +81,6 @@ def process_area(area: Area, stgrid: Union[xr.Dataset, xr.DataArray], variables:
                 else:
                     # Re-raise other ValueErrors that we don't know how to handle
                     raise e
-                # Indicate fallback was used
-                Path(area.output_path, "fallback_xarray").touch()
-                result = area.aggregate(clipped, variables, "xarray", operations, 
-                                        save_result=save_csv, skip_exist=skip_exist, filename=filename_aggr)
         else:
             raise ValueError(f"Unknown method: {method}. Use 'exact_extract', 'xarray', or 'fallback_xarray'.")
         
@@ -279,7 +275,7 @@ class LocalDaskProcessor:
                                     area.id: stgrid.rio.clip(
                                         area.geometry.geometry.to_crs(stgrid.rio.crs), 
                                         all_touched=True
-                                    ).persist() 
+                                    ).persist()
                                     for area in areas_to_process
                                 }
 
