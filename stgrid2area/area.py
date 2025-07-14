@@ -190,7 +190,7 @@ class Area():
         elif method == "xarray":
             df_timeseries = self._aggregate_xarray(stgrid, variables, operations)
         else:
-            raise ValueError(f"{self.id}: The method {method} is not supported. Use 'exact_extract', 'xarray'.")
+            raise ValueError(f"{self.id}: The method {method} is not supported. Use 'exact_extract' or 'xarray'.")
     
         if save_result:
             # Create the output directory if it does not exist
