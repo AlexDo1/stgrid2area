@@ -222,9 +222,19 @@ class LocalDaskProcessor:
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
         
-    def run(self) -> None:
+    def run(self) -> dict:
         """
         Run the parallel processing of areas using Dask with batching.
+
+        Returns
+        -------
+        dict
+            Processing summary containing:
+            - 'successful_areas': Number of areas processed successfully
+            - 'total_areas': Total number of areas
+            - 'failed_areas': List of area IDs that failed processing
+            - 'success_rate': Percentage of successful processing
+            - 'area_success_details': Dictionary with area IDs as keys and success counts as values
         
         """
         self.logger.info("Starting processing with LocalDaskProcessor.")
@@ -331,11 +341,22 @@ class LocalDaskProcessor:
 
                     # Final summary
                     successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
+                    failed_areas = [area_id for area_id, count in area_success.items() if count < total_stgrids]
+
+                    result = {
+                        "successful_areas": successful_areas,
+                        "total_areas": total_areas,
+                        "failed_areas": failed_areas,
+                        "success_rate": (successful_areas / total_areas) * 100 if total_areas > 0 else 0,
+                        "area_success_details": area_success
+                    }
+
                     self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
+
+                    return result
                 except Exception as e:
                     self.logger.error(f"An error occurred: {e}")
-                finally:
-                    self.logger.info("Shutting down Dask client and cluster.")
+                    raise  # Re-raise the exception
 
 
 class MPIDaskProcessor:
@@ -409,7 +430,7 @@ class MPIDaskProcessor:
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
 
-    def run(self, client: Client = None) -> None:
+    def run(self, client: Client = None) -> dict:
         """
         Run the parallel processing of areas using a Dask cluster initialized with dask-mpi.
         
@@ -422,6 +443,15 @@ class MPIDaskProcessor:
             A Dask client to use for processing. When using dask-mpi, the client should be created with 
             `dask_mpi.initialize()`.  
             If None, a new client will be created.
+        Returns
+        -------
+        dict
+            Processing summary containing:
+            - 'successful_areas': Number of areas processed successfully
+            - 'total_areas': Total number of areas
+            - 'failed_areas': List of area IDs that failed processing
+            - 'success_rate': Percentage of successful processing
+            - 'area_success_details': Dictionary with area IDs as keys and success counts as values
 
         """
         self.logger.info("Starting processing with MPIDaskProcessor (using dask-mpi).")
@@ -513,7 +543,7 @@ class MPIDaskProcessor:
                     client.cancel(futures)
                     # Clean up any remaining area_stgrids
                     for area_id, grid in list(area_stgrids.items()):
-                        if hasattr(grid, 'close'):
+                        if hasattr(grid, "close"):
                             try:
                                 grid.close()
                             except Exception:
@@ -531,11 +561,11 @@ class MPIDaskProcessor:
                     self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
                     # Only clean up what we know exists and might cause issues
                     try:
-                        if 'futures' in locals():
+                        if "futures" in locals():
                             client.cancel(futures)
-                        if 'area_stgrids' in locals():
+                        if "area_stgrids" in locals():
                             for grid in area_stgrids.values():
-                                if hasattr(grid, 'close'):
+                                if hasattr(grid, "close"):
                                     grid.close()
                     except Exception:
                         pass  # Ignore cleanup errors
@@ -550,5 +580,16 @@ class MPIDaskProcessor:
             self.logger.info(f"Finished batch {i}/{len(area_batches)}.")
 
         successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
+        failed_areas = [area_id for area_id, count in area_success.items() if count < total_stgrids]
+
+        result = {
+            'successful_areas': successful_areas,
+            'total_areas': total_areas,
+            'failed_areas': failed_areas,
+            'success_rate': (successful_areas / total_areas) * 100 if total_areas > 0 else 0,
+            'area_success_details': area_success  # Detailed per-area results
+        }
+
         self.logger.info(f"Processing completed: {successful_areas}/{total_areas} areas processed successfully.")
-        client.close()
+        
+        return result
