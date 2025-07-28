@@ -257,7 +257,7 @@ class Area():
                     time_index = stgrid_var.time.values
                     
                     # Create a list of dataframes, each dataframe contains the timeseries for one statistic
-                    sliced_dfs = [df.iloc[i:i+len(time_index)] for i in range(0, len(df), len(time_index))]
+                    sliced_dfs = [df.iloc[i:i+len(time_index)].copy() for i in range(0, len(df), len(time_index))]
                     
                     # Set the index to the time values and rename the columns
                     for i, df_slice in enumerate(sliced_dfs):
