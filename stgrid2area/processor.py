@@ -309,7 +309,7 @@ class LocalDaskProcessor:
                                 futures = client.compute(tasks)
 
                                 for future in as_completed(futures):
-                                    area_id = future.key.split('_')[0]  # Extract area ID from the key
+                                    area_id = future.key.rsplit("_", 1)[0]  # Extract area ID from the key
                                     try:
                                         result = future.result()
 
@@ -524,7 +524,7 @@ class MPIDaskProcessor:
                     futures = client.compute(tasks)
 
                     for future in as_completed(futures):
-                        area_id = future.key.split('_')[0]
+                        area_id = future.key.rsplit("_", 1)[0] # Extract area ID from the key
                         try:
                             result = future.result()
                             if isinstance(result, pd.DataFrame):
