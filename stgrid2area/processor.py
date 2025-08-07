@@ -328,13 +328,13 @@ class LocalDaskProcessor:
                                         grid.close()
                                     client.cancel(grid)
                                 del area_stgrids, tasks, futures
-                                gc.collect()
+
+                                client.run(gc.collect)  # Force GC on all workers
+                                client.run_on_scheduler(gc.collect)  # Also on scheduler
 
                             except Exception as e:
                                 self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
 
-                        # Restart the Dask client and cluster after the batch
-                        client.restart()
                         self.logger.info(f"Finished batch {i}/{len(area_batches)}. Restarted Dask client and cluster for the next batch.")
 
                     # Final summary
