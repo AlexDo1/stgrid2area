@@ -552,8 +552,9 @@ class MPIDaskProcessor:
                     del futures, tasks
                     gc.collect()
                             
-                    # Force garbage collection on all workers
+                    # Force garbage collection on all workers and the scheduler
                     client.run(gc.collect)
+                    client.run_on_scheduler(gc.collect)
 
                 except Exception as e:
                     self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
