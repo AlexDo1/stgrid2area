@@ -277,8 +277,6 @@ class LocalDaskProcessor:
                                 # No skipping, process all areas in the batch
                                 areas_to_process = batch
 
-                            self.logger.info(f"Processing {len(areas_to_process)} areas in batch {i}.")
-
                             try:
                                 # Pre-clip individually for each area
                                 area_stgrids = {
