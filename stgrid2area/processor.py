@@ -335,7 +335,7 @@ class LocalDaskProcessor:
                             except Exception as e:
                                 self.logger.error(f"Error during batch {i}, stgrid {n_stgrid}: {e}")
 
-                        self.logger.info(f"Finished batch {i}/{len(area_batches)}. Restarted Dask client and cluster for the next batch.")
+                        self.logger.info(f"Finished batch {i}/{len(area_batches)}.")
 
                     # Final summary
                     successful_areas = sum(1 for count in area_success.values() if count == total_stgrids)
@@ -575,6 +575,7 @@ class MPIDaskProcessor:
             # With MPI, restarting the client is challenging, so instead do a thorough memory cleanup            
             # Force garbage collection on all workers
             client.run(gc.collect)
+            client.run_on_scheduler(gc.collect)
         
             self.logger.info(f"Finished batch {i}/{len(area_batches)}.")
 
