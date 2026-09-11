@@ -1,11 +1,20 @@
-from .area import Area
+import warnings
 
 import geopandas as gpd
 
+from .area import Area
 
-def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: str, sort_by_proximity: bool = True, sort_by_area: bool = True) -> list[Area]:
+
+def geodataframe_to_areas(
+    areas: gpd.GeoDataFrame,
+    id_column: str,
+    output_dir: str,
+    sort_by_proximity: bool = None,
+    sort_by_area: bool = True,
+) -> list[Area]:
     """
-    Convert a GeoDataFrame of areas to a list of Area objects to be used as input for the ParallelProcessor.
+    Convert a GeoDataFrame of areas to a list of Area objects to be used as input for
+    the processor classes.
 
     Parameters
     ----------
@@ -17,17 +26,18 @@ def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: s
         The output directory where results will be saved.  
         Will always be a subdirectory of this directory, named after the area's id.
     sort_by_proximity : bool, optional
-        Whether to sort the areas by proximity. 
-        Default is True.
-        This is especially useful when using the ParallelProcessor with batches of areas, as this makes
-        sure that batched areas are close to each other, which is more efficient, as a smaller portion of the 
-        stgrid will be loaded into memory.
+        Deprecated, will be removed in a future release. Used to group nearby areas
+        together for a shared batch-wise bounding-box pre-clip, which no longer
+        exists (each area is now clipped independently), so this has no effect
+        anymore.
     sort_by_area : bool, optional
-        Whether to sort the areas by area size. 
+        Whether to sort the areas ascending by area size (smallest first).
         Default is True.
-        This is especially useful when using the ParallelProcessor with batches of areas, as this makes
-        sure that batched areas are of similar size, which is more efficient, as a similar amount of work 
-        will be done for each area in the each batch.
+        The processors submit tasks to Dask in this list order, and Dask schedules
+        equally-ready tasks in submission order, so smaller areas tend to start (and
+        finish) earlier. This means that if a large/complex area causes a worker to
+        run out of memory, it is more likely to happen towards the end of a run,
+        once most smaller areas are already done, rather than at a random point.
 
     Returns
     -------
@@ -35,9 +45,14 @@ def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: s
         The list of Area objects.
 
     """
-    # Sort the areas by proximity
-    if sort_by_proximity:
-        areas = areas.sort_values(by="geometry")
+    if sort_by_proximity is not None:
+        warnings.warn(
+            "sort_by_proximity is deprecated and no longer has any effect (the "
+            "batch-wise bounding-box pre-clip it was meant to help with no longer "
+            "exists), it will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     if sort_by_area:
         # Sort areas by area
@@ -48,12 +63,12 @@ def geodataframe_to_areas(areas: gpd.GeoDataFrame, id_column: str, output_dir: s
 
     areas_list = []
 
-    for idx in areas.index:
-        # Make sure to pass the row as a GeoDataFrame
-        area_gdf = areas.iloc[[idx]]
+    for i in range(len(areas)):
+        # Positional indexing so the loop follows the current (e.g. sorted) row order
+        area_gdf = areas.iloc[[i]]
 
         # Create an Area object
-        area = Area(geometry=area_gdf.iloc[[0]].reset_index(), id=area_gdf.iloc[[0]][id_column].values[0], output_dir=output_dir)
+        area = Area(geometry=area_gdf.reset_index(), id=area_gdf[id_column].values[0], output_dir=output_dir)
 
         # Append the Area object to the list
         areas_list.append(area)
