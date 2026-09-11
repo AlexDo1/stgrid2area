@@ -189,7 +189,6 @@ processor = LocalDaskProcessor(
     operations=["mean", "max"],  # Statistical operations
     n_workers=4,  # Number of parallel workers
     skip_exist=True,  # Skip areas that already have output files
-    batch_size=10,  # Process areas in batches of this size
     save_nc=True,  # Save clipped NetCDF files
     save_csv=True  # Save aggregated CSV files
 )
@@ -218,7 +217,6 @@ processor = MPIDaskProcessor(
     method="exact_extract",  # Aggregation method
     operations=["mean", "max"],  # Statistical operations
     skip_exist=True,  # Skip areas that already have output files
-    batch_size=100  # Process areas in batches of this size
 )
 
 processor.run(client=client)
@@ -228,6 +226,29 @@ processor.run(client=client)
 
 - **LocalDaskProcessor**: Use locally on a single machine / a single-node HPC batch queue with multiple cores.
 - **MPIDaskProcessor**: Use for large datasets on HPC systems using MPI for multi-node queues and distributed computing.
+
+### Stability & Memory Safety
+
+Both processors are built to fail as gracefully as possible instead of crashing an entire HPC job:
+
+- **Automatic task retries**: Failed tasks (e.g. a worker killed due to memory pressure and restarted by its nanny) are retried automatically (`task_retries`, default `2`) instead of permanently failing that area.
+- **Memory pressure warning**: The actual memory needed to clip and aggregate an area depends heavily on its size/complexity and on downstream library overhead (e.g. exact_extract/GDAL), which can't be reliably predicted upfront. Instead of guessing, stgrid2area watches for tasks that fail because their worker was killed (almost always caused by running out of memory) and, if this happens, logs one clear warning at the end of processing recommending you reduce your stgrid's time chunk size (e.g. `stgrid.chunk({"time": 90})`) and resubmit — already-completed areas are skipped automatically when `skip_exist=True`.
+- **Only load requested variables**: By default (`clip_only_variables=True`), only the variable(s) passed via `variables` are read and clipped, instead of every variable present in the source stgrid. This can drastically reduce memory use and runtime for datasets with many unused variables. Set `clip_only_variables=False` to keep the previous behaviour (clip and save all variables).
+- **Worker memory limit**: `LocalDaskProcessor` accepts a `memory_limit` (default `"auto"`, i.e. total system memory divided by `n_workers`), forwarded directly to `LocalCluster`.
+
+```python
+processor = LocalDaskProcessor(
+    areas=areas,
+    stgrid=stgrid,
+    variables="temperature",
+    method="exact_extract",
+    operations=["mean", "max"],
+    n_workers=4,
+    memory_limit="auto",           # per-worker memory limit passed to LocalCluster
+    task_retries=2,                # retry a task this many times if it fails/worker dies
+    clip_only_variables=True,      # only clip the variable(s) being aggregated
+)
+```
 
 ## Advanced Usage
 
