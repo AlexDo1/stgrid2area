@@ -6,6 +6,7 @@ import warnings
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+import numpy as np
 from exactextract import exact_extract
 
 
@@ -135,8 +136,12 @@ class Area():
             Can be "exact_extract", "xarray".
         operations : list[str]
             The operations to use for aggregation.
-            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
-            supported by the [exact_extract](https://github.com/isciences/exactextract) package.
+            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)", "nan_percentage" and all other
+            operations that are supported by the [exact_extract](https://github.com/isciences/exactextract) package.  
+            "nan_percentage" returns the percentage (0-100) of NaN/nodata pixels in the area for each timestep.
+            For method="exact_extract" this is approximated from the "count" operation (coverage-fraction-weighted
+            valid pixel count) and the area of the geometry, in the CRS of `stgrid`, while for method="xarray" it
+            is an unweighted percentage of NaN pixels.
         save_result : bool, optional
             If True, the aggregated timeseries will be saved to the output directory of the area.  
             The default is False.
@@ -219,8 +224,15 @@ class Area():
             The variables in stgrid to aggregate.
         operations : list[str]
             The operations to use for aggregation.  
-            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
-            supported by the [exact_extract](https://github.com/isciences/exactextract) package.
+            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)", "nan_percentage" and all other
+            operations that are supported by the [exact_extract](https://github.com/isciences/exactextract) package.  
+            "nan_percentage" is not a native exact_extract operation: it is derived from the coverage-fraction-weighted
+            "count" operation (valid pixels) as `100 * (1 - count / (area / pixel_area))`, where `area` is the area of
+            the (clipped) geometry and `pixel_area` is the area of one pixel, both in the CRS of `stgrid`. This avoids
+            a second exact_extract() call, at the cost of a small approximation where the geometry boundary does not
+            align exactly with the pixel grid. This requires the DataArray's `rio.nodata` to be set (e.g. via
+            `da.rio.write_nodata(np.nan, inplace=True)`) so that exact_extract can identify nodata pixels; a warning
+            is raised otherwise.
 
         Returns
         -------
@@ -229,6 +241,12 @@ class Area():
         """
         # Set the crs of the geometry to the crs of the stgrid
         geometry = self.geometry.to_crs(stgrid.rio.crs.to_string())
+
+        # "nan_percentage" has no exact_extract equivalent, derive it from the "count" operation instead
+        nan_percentage_requested = "nan_percentage" in operations
+        ee_operations = [op for op in operations if op != "nan_percentage"]
+        if nan_percentage_requested and "count" not in ee_operations:
+            ee_operations.append("count")
         
         # Store results for all variables
         all_dfs = []
@@ -248,7 +266,7 @@ class Area():
                 warnings.filterwarnings("ignore", message="Spatial reference system of input features does not exactly match raster.")
                 
                 try:
-                    df = exact_extract(stgrid_var, geometry, operations, output="pandas")
+                    df = exact_extract(stgrid_var, geometry, ee_operations, output="pandas")
                     
                     # Transpose dataframe
                     df = df.T
@@ -262,7 +280,7 @@ class Area():
                     # Set the index to the time values and rename the columns
                     for i, df_slice in enumerate(sliced_dfs):
                         df_slice.index = time_index
-                        df_slice.columns = [f"{variable}_{operations[i]}"]
+                        df_slice.columns = [f"{variable}_{ee_operations[i]}"]
                     
                         # Replace quantile column names to not include brackets, equal sign and points
                         for col in df_slice.columns:
@@ -275,10 +293,53 @@ class Area():
                     
                     # Concatenate the dataframes for this variable's operations
                     var_df = pd.concat(sliced_dfs, axis=1)
+                    var_df = var_df.astype(float)
+
+                    if nan_percentage_requested:
+                        # exact_extract determines valid/nodata pixels from the DataArray's rio.nodata value,
+                        # not simply from the presence of NaN values, so it must be set for a correct result
+                        if stgrid_var.rio.nodata is None:
+                            warnings.warn(
+                                f"{self.id}: Variable '{variable}' has no rio.nodata value set, so exact_extract "
+                                "cannot distinguish NaN/nodata pixels from valid ones and 'nan_percentage' will be "
+                                "wrong (0% for every timestep). Set it, e.g. via "
+                                "`stgrid[variable].rio.write_nodata(np.nan, inplace=True)`, before aggregating.",
+                                UserWarning,
+                            )
+
+                        # Expected pixel-weighted count if the geometry were fully covered by valid data
+                        pixel_area = abs(stgrid_var.rio.resolution()[0] * stgrid_var.rio.resolution()[1])
+                        # suppress geographic crs warnings for area calculation
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", category=UserWarning)
+                            area_sum = geometry.area.sum()
+                        full_count = area_sum / pixel_area
+
+                        nan_percentage = (1 - (var_df[f"{variable}_count"] / full_count)) * 100
+                        # Round away floating point noise (e.g. -0.0) from the area/pixel-count approximation
+                        var_df[f"{variable}_nan_percentage"] = nan_percentage.round(4).replace(-0.0, 0.0)
+
+                        # Drop the helper count column again, unless the caller explicitly asked for it
+                        if "count" not in operations:
+                            var_df = var_df.drop(columns=[f"{variable}_count"])
+
                     all_dfs.append(var_df)
                 
                 except Exception as e:
-                    raise ValueError(f"{self.id}: Error processing variable '{variable}': {str(e)}")
+                    error_msg = str(e)
+                    
+                    # Catch GEOS topology crashes and provide an actionable fix
+                    if "Never get here" in error_msg:
+                        raise ValueError(
+                            f"{self.id}: Error processing variable '{variable}'. "
+                            f"The underlying geometry engine crashed, which often means the area's polygon "
+                            f"is topologically invalid (e.g., self-intersecting or bow-tie shape). "
+                            f"Try to repair your geometry before processing. You can fix this in GeoPandas by running: "
+                            f"`gdf.geometry.make_valid()`"
+                        ) from e
+                    
+                    # Fallback for all other errors
+                    raise ValueError(f"{self.id}: Error processing variable '{variable}': {error_msg}")
         
         # Ensure we have at least one successful variable processed
         if not all_dfs:
@@ -310,8 +371,9 @@ class Area():
             The variables in stgrid to aggregate.
         operations : list[str]
             The operations to use for aggregation.  
-            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)" and all other operations that are 
-            supported by xarray.
+            Can be "mean", "min", "median", "max", "stdev", "quantile(q=0.XX)", "nan_percentage" and all other
+            operations that are supported by xarray.  
+            "nan_percentage" returns the unweighted percentage (0-100) of NaN pixels in the area.
 
         Returns
         -------
@@ -346,6 +408,8 @@ class Area():
                         result = stgrid_var.max(dim=spatial_dims)
                     elif operation == "stdev":
                         result = stgrid_var.std(dim=spatial_dims)
+                    elif operation == "nan_percentage":
+                        result = stgrid_var.isnull().mean(dim=spatial_dims) * 100
                     elif "quantile" in operation:
                         q = float(operation.split("=")[1].split(")")[0])
                         result = stgrid_var.quantile(q, dim=spatial_dims)
