@@ -1,3 +1,5 @@
+import warnings
+
 import pytest
 import geopandas as gpd
 import xarray as xr
@@ -62,6 +64,67 @@ def area_data():
     """
     # Create a polygon covering a square area that overlaps with the raster data.
     poly = Polygon([(48.95, 8.65), (49.25, 8.65), (49.25, 8.3), (48.95, 8.3)])
+    gdf = gpd.GeoDataFrame({"id": ["test_area"], "geometry": [poly]}, crs="EPSG:4326")
+
+    return gdf
+
+
+@pytest.fixture
+def raster_data_with_nan():
+    """
+    Create an example xarray Dataset like `raster_data`, but with two NaN pixels in the first
+    timestep (within the area that will be clipped) and `rio.nodata` set to NaN on the variable,
+    for exercising the "nan_percentage" aggregation operation.
+
+    """
+    # Create data for 3 time steps, with two NaN values in the first timestep
+    data = np.array([[[1.0, 2.0, 3.0, 4.0],
+                      [5.0, np.nan, 7.0, 8.0],
+                      [9.0, 10.0, np.nan, 12.0],
+                      [13.0, 14.0, 15.0, 16.0]],
+
+                     [[2.0, 3.0, 4.0, 5.0],
+                      [6.0, 7.0, 8.0, 9.0],
+                      [10.0, 11.0, 12.0, 13.0],
+                      [14.0, 15.0, 16.0, 17.0]],
+
+                     [[3.0, 4.0, 5.0, 6.0],
+                      [7.0, 8.0, 9.0, 10.0],
+                      [11.0, 12.0, 13.0, 14.0],
+                      [15.0, 16.0, 17.0, 18.0]]])
+
+    # Define the coordinates
+    times = pd.date_range("2023-01-01", periods=3)
+    coords = {
+        "time": times,
+        "x": np.array([49.0, 49.1, 49.2, 49.3]),
+        "y": np.array([8.4, 8.5, 8.6, 8.7])
+    }
+
+    # Create a xarray Dataset
+    ds = xr.Dataset(
+        {
+            "var": (["time", "y", "x"], data)
+        },
+        coords=coords
+    )
+
+    # Add a CRS to the dataset and mark NaN as the nodata value
+    ds.rio.write_crs("EPSG:4326", inplace=True)
+    ds["var"].rio.write_nodata(np.nan, inplace=True)
+
+    return ds
+
+
+@pytest.fixture
+def nan_area_data():
+    """
+    Create a GeoDataFrame whose bounds align exactly with the pixel edges of the 3x3 region that
+    `raster_data_with_nan` clips to (x: 48.95-49.25, y: 8.35-8.65), so that geometry.area / pixel_area
+    is exactly 9, for a deterministic test of the area-based "nan_percentage" exact_extract aggregation.
+
+    """
+    poly = Polygon([(48.95, 8.65), (49.25, 8.65), (49.25, 8.35), (48.95, 8.35)])
     gdf = gpd.GeoDataFrame({"id": ["test_area"], "geometry": [poly]}, crs="EPSG:4326")
 
     return gdf
@@ -277,8 +340,91 @@ def test_aggregate_xarray_multiple_variables(multi_var_raster_data, area_data):
     assert not aggregated_df.empty
     # Should have 4 columns (2 variables × 2 operations)
     assert aggregated_df.shape == (3, 4)
-    
+
     # Check column names follow expected pattern: {variable}_{operation}
     expected_columns = ["var1_mean", "var1_max", "var2_mean", "var2_max"]
     for col in expected_columns:
         assert col in aggregated_df.columns
+
+
+def test_aggregate_nan_percentage_exact_extract(raster_data_with_nan, nan_area_data):
+    """
+    Test the "nan_percentage" operation with the exact_extract method.
+
+    """
+    # Create an Area object whose geometry aligns exactly with the clipped pixel grid
+    area = Area(geometry=nan_area_data, id="test", output_dir="/tmp/output")
+
+    # First, clip the data to the area
+    clipped_ds = area.clip(raster_data_with_nan)
+
+    # Aggregate the clipped data spatially
+    aggregated_df = area.aggregate(clipped_ds, variables="var", method="exact_extract", operations=["nan_percentage"])
+
+    assert isinstance(aggregated_df, pd.DataFrame)
+    assert list(aggregated_df.columns) == ["var_nan_percentage"]
+
+    # The first timestep has 2 NaN cells out of 9 clipped cells, the other two timesteps have none
+    expected = np.array([2 / 9 * 100, 0.0, 0.0])
+    np.testing.assert_allclose(aggregated_df["var_nan_percentage"].values, expected, rtol=1e-6)
+
+
+def test_aggregate_nan_percentage_exact_extract_keeps_requested_count(raster_data_with_nan, nan_area_data):
+    """
+    Test that explicitly requesting "count" alongside "nan_percentage" keeps both columns in the result.
+
+    """
+    # Create an Area object whose geometry aligns exactly with the clipped pixel grid
+    area = Area(geometry=nan_area_data, id="test", output_dir="/tmp/output")
+
+    # First, clip the data to the area
+    clipped_ds = area.clip(raster_data_with_nan)
+
+    # Aggregate the clipped data spatially, requesting the helper count explicitly too
+    aggregated_df = area.aggregate(
+        clipped_ds, variables="var", method="exact_extract", operations=["nan_percentage", "count"],
+    )
+
+    assert set(aggregated_df.columns) == {"var_nan_percentage", "var_count"}
+    np.testing.assert_allclose(aggregated_df["var_count"].values, [7.0, 9.0, 9.0])
+
+
+def test_aggregate_nan_percentage_exact_extract_warns_without_nodata(raster_data_with_nan, nan_area_data):
+    """
+    Test that a UserWarning is raised for the exact_extract method if the variable has no
+    `rio.nodata` value set, since "nan_percentage" then cannot correctly identify NaN pixels.
+
+    """
+    # Create an Area object
+    area = Area(geometry=nan_area_data, id="test", output_dir="/tmp/output")
+
+    # Remove the nodata value to simulate a dataset where it was never set
+    raster_data_with_nan["var"].rio.write_nodata(None, inplace=True)
+
+    # First, clip the data to the area
+    clipped_ds = area.clip(raster_data_with_nan)
+
+    with pytest.warns(UserWarning, match="rio.nodata"):
+        area.aggregate(clipped_ds, variables="var", method="exact_extract", operations=["nan_percentage"])
+
+
+def test_aggregate_nan_percentage_xarray(raster_data_with_nan, area_data):
+    """
+    Test the "nan_percentage" operation with the xarray method.
+
+    """
+    # Create an Area object
+    area = Area(geometry=area_data, id="test", output_dir="/tmp/output")
+
+    # First, clip the data to the area
+    clipped_ds = area.clip(raster_data_with_nan)
+
+    # Aggregate the clipped data spatially
+    aggregated_df = area.aggregate(clipped_ds, variables="var", method="xarray", operations=["nan_percentage"])
+
+    assert isinstance(aggregated_df, pd.DataFrame)
+    assert list(aggregated_df.columns) == ["var_nan_percentage"]
+
+    # The first timestep has 2 NaN cells out of 9 clipped cells, the other two timesteps have none
+    expected = np.array([2 / 9 * 100, 0.0, 0.0])
+    np.testing.assert_allclose(aggregated_df["var_nan_percentage"].values, expected, rtol=1e-6)
